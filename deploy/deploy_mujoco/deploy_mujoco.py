@@ -1,4 +1,9 @@
+import select
+import sys
+import threading
 import time
+import tty
+import termios
 
 import mujoco.viewer
 import mujoco
@@ -26,6 +31,91 @@ def get_gravity_orientation(quaternion):
 def pd_control(target_q, q, kp, target_dq, dq, kd):
     """Calculates torques from position commands"""
     return (target_q - q) * kp + (target_dq - dq) * kd
+
+
+class RealtimeKeyboardController:
+    def __init__(self, cmd_init, step=0.2, max_value=2.0):
+        self.running = True
+        self.current_cmd = "无命令"
+        self.vel_cmd = np.array(cmd_init, dtype=np.float32)
+        self.step = step
+        self.max_value = max_value
+        self._lock = threading.Lock()
+
+    def start_keyboard_listener(self):
+        """Start a background thread for non-blocking keyboard control."""
+        if not sys.stdin.isatty():
+            print("stdin 不是终端，跳过键盘控制，使用配置中的初始速度命令。")
+            return
+
+        print("实时键盘控制说明:")
+        print("  w/s: 前进/后退，每次 +/-0.2")
+        print("  a/d: 左移/右移，每次 +/-0.2")
+        print("  j/l: 左转/右转，每次 +/-0.2")
+        print("  z 或 空格: 速度清零")
+        print("  q: 退出程序")
+        print(
+            f"初始速度命令: "
+            f"[{self.vel_cmd[0]:.2f}, {self.vel_cmd[1]:.2f}, {self.vel_cmd[2]:.2f}]"
+        )
+
+        def keyboard_listener():
+            old_settings = termios.tcgetattr(sys.stdin)
+            try:
+                tty.setcbreak(sys.stdin.fileno())
+                while self.running:
+                    if not select.select([sys.stdin], [], [], 0.01)[0]:
+                        continue
+                    key = sys.stdin.read(1).lower()
+                    self.process_key(key)
+            except KeyboardInterrupt:
+                self.running = False
+            except Exception as exc:
+                self.running = False
+                print(f"键盘监听错误: {exc}")
+            finally:
+                termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
+
+        keyboard_thread = threading.Thread(target=keyboard_listener, daemon=True)
+        keyboard_thread.start()
+
+    def process_key(self, key):
+        with self._lock:
+            if key == "q":
+                self.running = False
+                self.current_cmd = "退出程序"
+            elif key == "w":
+                self.vel_cmd[0] = min(self.vel_cmd[0] + self.step, self.max_value)
+                self.current_cmd = f"前进加速: {self.vel_cmd[0]:.1f}"
+            elif key == "s":
+                self.vel_cmd[0] = max(self.vel_cmd[0] - self.step, -self.max_value)
+                self.current_cmd = f"后退加速: {self.vel_cmd[0]:.1f}"
+            elif key == "a":
+                self.vel_cmd[1] = min(self.vel_cmd[1] + self.step, self.max_value)
+                self.current_cmd = f"左移加速: {self.vel_cmd[1]:.1f}"
+            elif key == "d":
+                self.vel_cmd[1] = max(self.vel_cmd[1] - self.step, -self.max_value)
+                self.current_cmd = f"右移加速: {self.vel_cmd[1]:.1f}"
+            elif key == "j":
+                self.vel_cmd[2] = min(self.vel_cmd[2] + self.step, self.max_value)
+                self.current_cmd = f"左转加速: {self.vel_cmd[2]:.1f}"
+            elif key == "l":
+                self.vel_cmd[2] = max(self.vel_cmd[2] - self.step, -self.max_value)
+                self.current_cmd = f"右转加速: {self.vel_cmd[2]:.1f}"
+            elif key in {"z", " "}:
+                self.vel_cmd[:] = 0.0
+                self.current_cmd = "速度清零"
+            else:
+                return
+
+            print(
+                f"{self.current_cmd}，当前速度命令: "
+                f"[{self.vel_cmd[0]:.2f}, {self.vel_cmd[1]:.2f}, {self.vel_cmd[2]:.2f}]"
+            )
+
+    def get_vel_cmd(self):
+        with self._lock:
+            return self.vel_cmd.copy()
 
 
 if __name__ == "__main__":
@@ -67,6 +157,7 @@ if __name__ == "__main__":
     obs = np.zeros(num_obs, dtype=np.float32)
 
     counter = 0
+    keyboard_controller = RealtimeKeyboardController(cmd_init=cmd)
 
     # Load robot model
     m = mujoco.MjModel.from_xml_path(xml_path)
@@ -75,11 +166,16 @@ if __name__ == "__main__":
 
     # load policy
     policy = torch.jit.load(policy_path)
+    keyboard_controller.start_keyboard_listener()
 
     with mujoco.viewer.launch_passive(m, d) as viewer:
         # Close the viewer automatically after simulation_duration wall-seconds.
         start = time.time()
-        while viewer.is_running() and time.time() - start < simulation_duration:
+        while (
+            viewer.is_running()
+            and keyboard_controller.running
+            and time.time() - start < simulation_duration
+        ):
             step_start = time.time()
             tau = pd_control(target_dof_pos, d.qpos[7:], kps, np.zeros_like(kds), d.qvel[6:], kds)
             d.ctrl[:] = tau
@@ -90,6 +186,8 @@ if __name__ == "__main__":
             counter += 1
             if counter % control_decimation == 0:
                 # Apply control signal here.
+
+                cmd = keyboard_controller.get_vel_cmd()
 
                 # create observation
                 qj = d.qpos[7:]
@@ -128,3 +226,5 @@ if __name__ == "__main__":
             time_until_next_step = m.opt.timestep - (time.time() - step_start)
             if time_until_next_step > 0:
                 time.sleep(time_until_next_step)
+
+    print("程序退出")
