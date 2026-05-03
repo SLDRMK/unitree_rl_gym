@@ -1,6 +1,10 @@
 <mujoco model="g1_23dof">
   <compiler angle="radian" meshdir="meshes"/>
 
+  <default>
+    <joint damping="0.001" armature="0.01" frictionloss="0.1"/>
+  </default>
+
   <asset>
     <mesh name="pelvis" file="pelvis.STL"/>
     <mesh name="pelvis_contour_link" file="pelvis_contour_link.STL"/>
@@ -244,6 +248,6 @@
   </asset>
   <worldbody>
     <light pos="1 0 3.5" dir="0 0 -1" directional="true"/>
-    <geom name="floor" size="0 0 0.05" type="plane" material="groundplane"/>
+    <geom name="floor" size="0 0 0.05" type="plane" material="groundplane" solimp="0.95 0.95 0.001" solref="0.005 1" friction="1.0 0.1 0.1"/>
   </worldbody>
 </mujoco>

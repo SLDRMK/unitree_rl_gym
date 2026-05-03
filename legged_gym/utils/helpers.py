@@ -70,7 +70,20 @@ def parse_sim_params(args, cfg):
 
     return sim_params
 
+def parse_checkpoint_arg(value):
+    """CLI: iteration number (int) or full/relative path to a model_*.pt file (str)."""
+    if value is None:
+        return None
+    s = str(value).strip()
+    try:
+        return int(s)
+    except ValueError:
+        return s
+
+
 def get_load_path(root, load_run=-1, checkpoint=-1):
+    if isinstance(checkpoint, str):
+        return os.path.abspath(os.path.expanduser(checkpoint))
     try:
         runs = os.listdir(root)
         #TODO sort by date to handle change of month
@@ -100,6 +113,10 @@ def update_cfg_from_args(env_cfg, cfg_train, args):
         # num envs
         if args.num_envs is not None:
             env_cfg.env.num_envs = args.num_envs
+        if hasattr(args, "training_stage") and args.training_stage is not None and hasattr(env_cfg, "staged_training"):
+            env_cfg.staged_training.stage = args.training_stage
+        if hasattr(args, "lower_body_checkpoint") and args.lower_body_checkpoint is not None and hasattr(env_cfg, "staged_training"):
+            env_cfg.staged_training.lower_body_checkpoint = args.lower_body_checkpoint
     if cfg_train is not None:
         if args.seed is not None:
             cfg_train.seed = args.seed
@@ -126,7 +143,8 @@ def get_args():
         {"name": "--experiment_name", "type": str,  "help": "Name of the experiment to run or load. Overrides config file if provided."},
         {"name": "--run_name", "type": str,  "help": "Name of the run. Overrides config file if provided."},
         {"name": "--load_run", "type": str,  "help": "Name of the run to load when resume=True. If -1: will load the last run. Overrides config file if provided."},
-        {"name": "--checkpoint", "type": int,  "help": "Saved model checkpoint number. If -1: will load the last checkpoint. Overrides config file if provided."},
+        {"name": "--checkpoint", "type": parse_checkpoint_arg, "default": None,
+         "help": "Checkpoint: iteration number (e.g. 10000 -> model_10000.pt) or path to a .pt file. If omitted with resume: last checkpoint in run."},
         
         {"name": "--headless", "action": "store_true", "default": False, "help": "Force display off at all times"},
         {"name": "--horovod", "action": "store_true", "default": False, "help": "Use horovod for multi-gpu training"},
@@ -134,6 +152,8 @@ def get_args():
         {"name": "--num_envs", "type": int, "help": "Number of environments to create. Overrides config file if provided."},
         {"name": "--seed", "type": int, "help": "Random seed. Overrides config file if provided."},
         {"name": "--max_iterations", "type": int, "help": "Maximum number of training iterations. Overrides config file if provided."},
+        {"name": "--training_stage", "type": str, "help": "Training stage override, e.g. base, upper_body, joint_finetune."},
+        {"name": "--lower_body_checkpoint", "type": str, "help": "Checkpoint for the frozen lower-body policy used by upper_body stage."},
     ]
     # parse arguments
     args = gymutil.parse_arguments(

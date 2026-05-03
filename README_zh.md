@@ -57,8 +57,44 @@ python legged_gym/scripts/train.py --task=xxx
 - `--max_iterations`: 训练的最大迭代次数
 - `--sim_device`: 仿真计算设备，指定 CPU 为 `--sim_device=cpu`
 - `--rl_device`: 强化学习计算设备，指定 CPU 为 `--rl_device=cpu`
+- `--training_stage`: G1 23DoF 分阶段训练模式，可选 `upper_body` 或 `joint_finetune`
+- `--lower_body_checkpoint`: `upper_body` 阶段使用的 12DoF 下半身训练 checkpoint，例如 `logs/g1/xxx/model_10000.pt`
 
 **默认保存训练结果**：`logs/<experiment_name>/<date_time>_<run_name>/model_<iteration>.pt`
+
+#### G1 分阶段训练
+
+仓库额外提供了 G1 23DoF 训练流程：
+
+- `g1`: 原始 12DoF 下半身策略。
+- `g1_upper + upper_body`: 23DoF 机器人中，下半身由 12DoF checkpoint 控制，上半身策略训练。
+- `g1_upper + joint_finetune`: 23DoF 全身联合训练或微调。
+
+第二阶段训练上半身：
+
+```bash
+bash legged_gym/scripts/train_g1_upper_stage2.sh
+```
+
+也可以手动指定下半身 checkpoint：
+
+```bash
+LOWER_BODY_CHECKPOINT=logs/g1/Apr13_07-17-29_/model_10000.pt \
+NUM_ENVS=4096 \
+MAX_ITERATIONS=10000 \
+RUN_NAME=stage2_upper_stable \
+bash legged_gym/scripts/train_g1_upper_stage2.sh
+```
+
+全身 23DoF 训练：
+
+```bash
+bash legged_gym/scripts/train_g1_fullbody_isaaclab.sh
+```
+
+该脚本使用 `g1_upper` 任务和 `joint_finetune` 阶段，不加载下半身 checkpoint，策略直接输出 23 维动作。
+当前示例日志目录为 `logs/g1_upper/May02_11-49-23_fullbody_isaaclab_randomized`。
+全身阶段默认保持原版 G1 风格的域随机化、观测噪声和 PPO 探索噪声：摩擦随机化 `[0.1, 1.25]`、base mass 随机化 `[-1, 3]`、push 随机化开启、观测噪声开启、`init_noise_std=0.8`、`action_scale=0.25`。`joint_finetune` 阶段会使用随机关节初始位置 reset，避免策略只适应默认站姿。
 
 ---
 
@@ -78,9 +114,43 @@ python legged_gym/scripts/play.py --task=xxx
 
 #### 💾 导出网络
 
-Play 会导出 Actor 网络，保存于 `logs/{experiment_name}/exported/policies` 中：
+Play 会导出 Actor 网络，保存到当前加载 checkpoint 所在的 run 目录中。例如加载
+`logs/g1_upper/May02_11-49-20_stage2_upper_stable/model_10000.pt` 时，会导出到
+`logs/g1_upper/May02_11-49-20_stage2_upper_stable/`：
 - 普通网络（MLP）导出为 `policy_1.pt`
 - RNN 网络，导出为 `policy_lstm_1.pt`
+
+导出 G1 12DoF 下半身策略：
+
+```bash
+python legged_gym/scripts/play.py \
+  --task=g1 \
+  --load_run=Apr13_07-17-29_ \
+  --checkpoint=10000
+```
+
+导出 G1 23DoF 上半身/组合策略：
+
+```bash
+python legged_gym/scripts/play.py \
+  --task=g1_upper \
+  --training_stage=upper_body \
+  --lower_body_checkpoint=logs/g1/Apr13_07-17-29_/model_10000.pt \
+  --load_run=May02_11-49-20_stage2_upper_stable \
+  --checkpoint=10000
+```
+
+导出 G1 23DoF 全身策略：
+
+```bash
+python legged_gym/scripts/play.py \
+  --task=g1_upper \
+  --training_stage=joint_finetune \
+  --load_run=May02_11-49-23_fullbody_isaaclab_randomized \
+  --checkpoint=10000
+```
+
+注意：`lower_body_checkpoint` 必须使用训练 checkpoint（`model_*.pt`），不要使用导出的 TorchScript 文件（`policy_lstm_1.pt`）。
   
 ### Play 效果
 
@@ -109,7 +179,33 @@ python deploy/deploy_mujoco/deploy_mujoco.py g1.yaml
 
 #### ➡️  替换网络模型
 
-默认模型位于 `deploy/pre_train/{robot}/motion.pt`；自己训练模型保存于`logs/g1/exported/policies/policy_lstm_1.pt`，只需替换 yaml 配置文件中 `policy_path`。
+默认模型位于 `deploy/pre_train/{robot}/motion.pt`；自己训练的模型需要先通过 Play 导出为 TorchScript，再替换 yaml 配置文件中的 `policy_path`。
+
+G1 Mujoco 目前提供三种配置：
+
+```bash
+# 12DoF 下半身单策略
+python deploy/deploy_mujoco/deploy_mujoco.py g1.yaml
+
+# 23DoF 全身单策略
+python deploy/deploy_mujoco/deploy_mujoco.py g1_23dof.yaml
+
+# 12DoF 下半身策略 + 23DoF 上半身/全身策略组合推理
+python deploy/deploy_mujoco/deploy_mujoco.py g1_upper_composite.yaml
+```
+
+对应配置文件：
+
+- `deploy/deploy_mujoco/configs/g1.yaml`: 使用 `logs/g1/<run>/policy_lstm_1.pt`
+- `deploy/deploy_mujoco/configs/g1_23dof.yaml`: 使用 `logs/g1_upper/<run>/policy_1.pt`
+- `deploy/deploy_mujoco/configs/g1_upper_composite.yaml`: 同时配置 `policy_path` 和 `lower_body_policy_path`
+
+组合推理时：
+
+- `lower_body_policy_path` 控制前 12 个下半身关节。
+- `policy_path` 可以是 23DoF 策略，部署脚本会自动取上半身部分；也可以是只输出上半身动作的策略。
+- `upper_body_action_scale` 用于缩放上半身动作幅度。
+- `clip_actions` 用于部署时裁剪策略输出动作，默认配置为 `1.0`，可避免 MuJoCo 中过大的未约束动作造成瞬间失稳。
 
 #### 运行效果
 
