@@ -69,6 +69,7 @@ class G1Robot(LeggedRobot):
         self.lower_body_actions = None
         self.student_lower_body_actions = None
         self.upper_body_dof_indices = None
+        self.arm_dof_indices = None
         self.waist_dof_indices = None
         self.upper_body_periodic_scales = None
 
@@ -78,6 +79,8 @@ class G1Robot(LeggedRobot):
         dof_name_to_idx = {name: i for i, name in enumerate(self.dof_names)}
         self.upper_body_dof_indices = self._resolve_dof_indices(dof_name_to_idx, staged_cfg.upper_body_joint_names, "Upper-body")
         self.waist_dof_indices = self._resolve_dof_indices(dof_name_to_idx, staged_cfg.waist_joint_names, "Waist")
+        arm_joint_names = [name for name in staged_cfg.upper_body_joint_names if name not in staged_cfg.waist_joint_names]
+        self.arm_dof_indices = self._resolve_dof_indices(dof_name_to_idx, arm_joint_names, "Arm")
         self.upper_body_periodic_scales = torch.tensor(
             staged_cfg.upper_body_periodic_scales,
             dtype=torch.float,
@@ -178,7 +181,7 @@ class G1Robot(LeggedRobot):
     def _compute_lower_body_actions(self):
         if self.lower_body_policy is None:
             return None
-        with torch.inference_mode():
+        with torch.no_grad():
             lower_obs = self._get_lower_body_policy_obs()
             self.lower_body_actions = self.lower_body_policy.act_inference(lower_obs)
         return self.lower_body_actions
@@ -299,6 +302,19 @@ class G1Robot(LeggedRobot):
             return 1.
         return self._warmup_weight(staged_cfg.upper_body_periodic_warmup_s)
 
+    def _upper_body_constraint_weight(self):
+        staged_cfg = getattr(self.cfg, "staged_training", None)
+        if staged_cfg is None:
+            return 1.
+        progress = self._warmup_weight(staged_cfg.upper_body_constraint_decay_s)
+        return 1.0 - (1.0 - staged_cfg.upper_body_constraint_min_weight) * progress
+
+    def _upper_body_motion_reward_weight(self):
+        staged_cfg = getattr(self.cfg, "staged_training", None)
+        if staged_cfg is None:
+            return 1.
+        return self._warmup_weight(staged_cfg.upper_body_motion_reward_warmup_s)
+
     def _upper_body_periodic_target(self):
         staged_cfg = self.cfg.staged_training
         phase_signal = torch.sin(2 * np.pi * self.phase).unsqueeze(1)
@@ -310,23 +326,37 @@ class G1Robot(LeggedRobot):
         if not self._upper_body_reward_active():
             return torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
         upper_ids = self.upper_body_dof_indices
-        return torch.sum(torch.abs(self.dof_pos[:, upper_ids] - self.default_dof_pos[:, upper_ids]), dim=1)
+        pos_error = torch.sum(torch.abs(self.dof_pos[:, upper_ids] - self.default_dof_pos[:, upper_ids]), dim=1)
+        return self._upper_body_constraint_weight() * pos_error
 
     def _reward_upper_body_vel(self):
         if not self._upper_body_reward_active():
             return torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
-        return torch.sum(torch.square(self.dof_vel[:, self.upper_body_dof_indices]), dim=1)
+        vel_error = torch.sum(torch.square(self.dof_vel[:, self.upper_body_dof_indices]), dim=1)
+        return self._upper_body_constraint_weight() * vel_error
 
     def _reward_upper_body_action(self):
         if not self._upper_body_reward_active():
             return torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
-        return torch.sum(torch.square(self.actions[:, self.upper_body_dof_indices]), dim=1)
+        action_error = torch.sum(torch.square(self.actions[:, self.upper_body_dof_indices]), dim=1)
+        return self._upper_body_constraint_weight() * action_error
 
     def _reward_upper_body_action_rate(self):
         if not self._upper_body_reward_active():
             return torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
         upper_ids = self.upper_body_dof_indices
-        return torch.sum(torch.square(self.actions[:, upper_ids] - self.last_actions[:, upper_ids]), dim=1)
+        action_rate_error = torch.sum(torch.square(self.actions[:, upper_ids] - self.last_actions[:, upper_ids]), dim=1)
+        return self._upper_body_constraint_weight() * action_rate_error
+
+    def _reward_upper_body_motion_vel(self):
+        if not self._upper_body_reward_active():
+            return torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
+        staged_cfg = self.cfg.staged_training
+        arm_vel = torch.abs(self.dof_vel[:, self.arm_dof_indices])
+        arm_vel = torch.clamp(arm_vel, max=staged_cfg.upper_body_motion_vel_clip)
+        command_norm = torch.norm(self.commands[:, :2], dim=1) + torch.abs(self.commands[:, 2])
+        command_active = command_norm > staged_cfg.upper_body_motion_command_threshold
+        return self._upper_body_motion_reward_weight() * command_active * torch.sum(arm_vel, dim=1)
 
     def _reward_waist_still(self):
         if self.waist_dof_indices is None:

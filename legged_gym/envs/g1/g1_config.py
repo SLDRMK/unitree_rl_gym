@@ -205,10 +205,15 @@ class G1UpperBodyCfg( G1RoughCfg ):
             'right_wrist_roll_joint',
         ]
         waist_joint_names = ['waist_yaw_joint']
-        upper_body_action_scale = 0.35
+        upper_body_action_scale = 0.55
         upper_body_action_warmup_s = 600.0
-        upper_body_periodic_amplitude = 0.10
+        upper_body_periodic_amplitude = 0.18
         upper_body_periodic_warmup_s = 600.0
+        upper_body_constraint_decay_s = 1200.0
+        upper_body_constraint_min_weight = 0.25
+        upper_body_motion_reward_warmup_s = 1200.0
+        upper_body_motion_vel_clip = 2.0
+        upper_body_motion_command_threshold = 0.1
         upper_body_periodic_scales = [
             0.0,   # waist_yaw_joint
             1.0,   # left_shoulder_pitch_joint
@@ -228,12 +233,13 @@ class G1UpperBodyCfg( G1RoughCfg ):
         class scales( G1RoughCfg.rewards.scales ):
             termination = -200.0
             lower_body_action_match = -1.0
-            upper_body_pos = -0.3
-            upper_body_vel = -0.05
-            upper_body_action = -0.02
-            upper_body_action_rate = -0.05
+            upper_body_pos = -0.12
+            upper_body_vel = -0.03
+            upper_body_action = -0.01
+            upper_body_action_rate = -0.03
             waist_still = -0.3
-            upper_body_periodic = -0.1
+            upper_body_periodic = -0.25
+            upper_body_motion_vel = 0.025
 
 class G1RoughCfgPPO( LeggedRobotCfgPPO ):
     class policy:
