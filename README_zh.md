@@ -45,7 +45,7 @@ python legged_gym/scripts/train.py --task=xxx
 ```
 
 #### ⚙️  参数说明
-- `--task`: 必选参数；常用 `go2`, `g1`, `h1`, `h1_2`，G1 全身另见 `g1_upper`、`g1_upper_motion_ref`（下文「G1 分阶段训练」「参考运动」）
+- `--task`: 必选参数；常用 `go2`, `g1`, `h1`, `h1_2`，G1 全身另见 `g1_upper`、`g1_upper_motion_ref`、`g1_upper_amp`（下文「G1 分阶段训练」「参考运动」「AMP」）
 - `--headless`: 默认启动图形界面，设为 true 时不渲染图形界面（效率更高）
 - `--resume`: 从日志中选择 checkpoint 继续训练
 - `--experiment_name`: 运行/加载的 experiment 名称
@@ -112,6 +112,27 @@ bash legged_gym/scripts/train_g1_upper_motion_ref.sh
 
 超参见 `legged_gym/envs/g1/g1_config.py` 中的 `G1UpperBodyMotionRefCfg`：`motion_ref_dof` 权重、`motion_ref.err_reduce`、**σ 为关节误差向量 L2 范数尺度（rad），课程按 `σ ← max(σ_min, min(batch均值‖q−q_ref‖₂, σ))` 更新，奖励为 `exp(−mse/σ²)`**、`curriculum_norm_ema_alpha` 等。
 
+#### G1 AMP（判别器对抗式运动先验，可选）
+
+任务 **`g1_upper_amp`**：在全身 **`joint_finetune`** 上，用判别器对齐 mink pickle 里的专家关节轨迹分布，而不是逐步追踪 \(q\simeq q_\mathrm{ref}\)。
+
+- **多帧扩张输入**：判别器输入为若干历史步上拼接的 **关节相对默认位姿的缩放 dof_pos、dof_vel**（与训练中观测缩放一致）。
+- **策略回报**：在每步仿真回报上叠加 **\(r_{\mathrm{amp}} = -\log(1 - D(\cdot))\)**（实现对 `sigmoid(logits)` 后的概率，并有 `clamp` 与可调 **`reward_scale`**）。
+- **判别器训练**：`BCEWithLogitsLoss`；专家样本目标 **`1 - label_smoothing`**，策略 rollout 样本目标 **`label_smoothing`**（标签平滑）。
+- **实验目录**：`g1_upper_amp`，权重与日志位于 **`logs/g1_upper_amp/`**；checkpoint 内含 **判别器与其优化器**，便于 **`--resume`**。
+
+训练脚本（仓库根目录）：
+
+```bash
+export MOTION_REF_DATA_DIR=/path/to/mink/pickles   # 与同目录参考运动档位相同
+
+bash legged_gym/scripts/train_g1_upper_amp.sh
+```
+
+等价调用：`python legged_gym/scripts/train.py --task=g1_upper_amp --training_stage=joint_finetune ...`。同样需要 **`MOTION_REF_DATA_DIR`**（或配置里写明 `motion_ref.data_dir`）以加载 mink clip。
+
+超参见 `legged_gym/envs/g1/g1_config.py` 中的 **`G1UpperBodyAmpCfg`** 及其嵌套 **`amp`**：`history_frames`、`hidden_dims`、`label_smoothing`、`reward_scale`、判别器学习率、`num_updates_per_iteration` 等；`motion_ref_dof` 奖励在该任务中为 **0**。
+
 ---
 
 ### 2. Play
@@ -156,6 +177,8 @@ python legged_gym/scripts/play.py \
   --checkpoint=10000
 ```
 
+上述 `upper_body` 组合 Play 时：`lower_body_checkpoint` 必须使用训练 checkpoint（`model_*.pt`），不要使用导出的 TorchScript 文件（`policy_lstm_1.pt`）。
+
 导出 G1 23DoF 全身策略：
 
 ```bash
@@ -179,8 +202,19 @@ python legged_gym/scripts/play.py \
 
 可选：`--checkpoint=8000`，或 `--checkpoint=logs/g1_upper_motion_ref/May13_12-16-09_g1_upper_motion_ref_mink/model_8000.pt` 指定权重；默认加载该 run 下最新的 `model_*.pt`。
 
-上述 `upper_body` 组合 Play 时：`lower_body_checkpoint` 必须使用训练 checkpoint（`model_*.pt`），不要使用导出的 TorchScript 文件（`policy_lstm_1.pt`）。
-  
+**G1 AMP 策略**（`g1_upper_amp`）：与训练一致，需设置 **`MOTION_REF_DATA_DIR`** 以初始化动作库。**Play / 导出策略**时使用 Actor-Critic；若 checkpoint 中带判别器权重，`make_alg_runner` 仍会按任务配置拉起对应 Runner。
+
+```bash
+export MOTION_REF_DATA_DIR=/path/to/mink/pickles
+
+python legged_gym/scripts/play.py \
+  --task=g1_upper_amp \
+  --training_stage=joint_finetune \
+  --load_run=<你的_amp_run_目录名>
+```
+
+可选：`--checkpoint` 填迭代序号或 **`logs/g1_upper_amp/<date>_<run_name>/model_*.pt`** 完整路径。
+
 ### Play 效果
 
 | Go2 | G1 | H1 | H1_2 |

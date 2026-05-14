@@ -45,7 +45,7 @@ python legged_gym/scripts/train.py --task=xxx
 ```
 
 #### ⚙️ Parameter Description
-- `--task`: Required parameter; values include `go2`, `g1`, `h1`, `h1_2`, plus G1 23DoF variants such as `g1_upper`, `g1_upper_motion_ref` (see subsection below).
+- `--task`: Required parameter; values include `go2`, `g1`, `h1`, `h1_2`, plus G1 23DoF variants such as `g1_upper`, `g1_upper_motion_ref`, `g1_upper_amp` (see subsection below).
 
 - `--headless`: Defaults to starting with a graphical interface; set to true for headless mode (higher efficiency).
 - `--resume`: Resume training from a checkpoint in the logs.
@@ -77,6 +77,23 @@ You can also set `NUM_ENVS`, `MAX_ITERATIONS`, `RUN_NAME`, or call `train.py` wi
 
 **Tune** (see `legged_gym/envs/g1/g1_config.py`, class `G1UpperBodyMotionRefCfg`): `motion_ref_dof` scale, `motion_ref.err_reduce` (`mean` vs `sum`), `command_gate`, **`motion_ref.sigma` / `sigma_min` (L² norm scale in rad for joint error vector, curriculum updates `σ ← max(σ_min, min(mean ‖q−q_ref‖₂, σ))`)**, `curriculum_norm_ema_alpha`, etc.
 
+#### G1: AMP-style motion prior (optional)
+
+Task **`g1_upper_amp`** uses an **AMP-style discriminator** instead of dense per-step tracking of reference joint angles: the discriminator classifies stacked **multi-frame joint features** (scaled relative `dof_pos` and `dof_vel`) from simulator rollouts vs expert trajectories sampled from the same mink pickles. Rewards add **r_amp = −log(clamp(1 − σ(D(x)), eps))** scaled by **`cfg.amp.reward_scale`**; discriminator training uses **binary cross-entropy with label smoothing**.
+
+- Experiment folder: **`logs/g1_upper_amp/`**
+- Train script (repo root):
+
+```bash
+export MOTION_REF_DATA_DIR=/path/to/mink/pickles
+
+bash legged_gym/scripts/train_g1_upper_amp.sh
+```
+
+Equivalent: `python legged_gym/scripts/train.py --task=g1_upper_amp --training_stage=joint_finetune ...`. Same **`MOTION_REF_DATA_DIR`** (or filled `motion_ref.data_dir`) as `g1_upper_motion_ref` so clips load.
+
+Tune **`G1UpperBodyAmpCfg` / nested `amp`** (and mirrored `train_cfg`): `history_frames`, `hidden_dims`, `label_smoothing`, `reward_scale`, `disc_learning_rate`, `num_updates_per_iteration`, etc. Checkpoints **`model_*.pt` also contain discriminator weights** (`discriminator_state_dict`) for `--resume`.
+
 ### 2. Play
 
 To visualize the training results in Gym, run the following command:
@@ -103,6 +120,19 @@ python legged_gym/scripts/play.py \
 ```
 
 Optional: `--checkpoint=8000` or `--checkpoint=logs/g1_upper_motion_ref/<run>/model_8000.pt` to pick a specific checkpoint (default: latest `model_*.pt` in that run). Checkpoints live under `logs/g1_upper_motion_ref/<date>_<run_name>/`.
+
+**G1 AMP policy** (`g1_upper_amp`): set **`MOTION_REF_DATA_DIR`** like training so the motion bank initializes. Inference only needs the Actor–Critic; the runner still constructs the discriminator when loading checkpoints that include discriminator weights.
+
+```bash
+export MOTION_REF_DATA_DIR=/path/to/mink/pickles
+
+python legged_gym/scripts/play.py \
+  --task=g1_upper_amp \
+  --training_stage=joint_finetune \
+  --load_run=<your_amp_run_folder_name>
+```
+
+Optional: `--checkpoint=<iter>` or a full path to `logs/g1_upper_amp/<date>_<run_name>/model_*.pt`.
 
 #### 💾 Export Network
 
