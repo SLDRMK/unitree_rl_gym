@@ -45,7 +45,8 @@ python legged_gym/scripts/train.py --task=xxx
 ```
 
 #### ⚙️ Parameter Description
-- `--task`: Required parameter; values can be (go2, g1, h1, h1_2).
+- `--task`: Required parameter; values include `go2`, `g1`, `h1`, `h1_2`, plus G1 23DoF variants such as `g1_upper`, `g1_upper_motion_ref` (see subsection below).
+
 - `--headless`: Defaults to starting with a graphical interface; set to true for headless mode (higher efficiency).
 - `--resume`: Resume training from a checkpoint in the logs.
 - `--experiment_name`: Name of the experiment to run/load.
@@ -60,7 +61,21 @@ python legged_gym/scripts/train.py --task=xxx
 
 **Default Training Result Directory**: `logs/<experiment_name>/<date_time>_<run_name>/model_<iteration>.pt`
 
----
+#### G1: motion reference imitation (optional)
+
+This repo includes an optional task **`g1_upper_motion_ref`**: full-body PPO on the 23-DoF G1 with a **reference motion shaping** reward using mink-retargeted walking clips (pickle files from your pipeline, e.g. `*_poses.pkl`). It does not replace `g1_upper`; it uses experiment name `g1_upper_motion_ref` and logs under `logs/g1_upper_motion_ref/`.
+
+**Train** (from the repository root):
+
+```bash
+export MOTION_REF_DATA_DIR=/path/to/mink/pickles   # directory of retargeted *.pkl clips
+
+bash legged_gym/scripts/train_g1_upper_motion_ref.sh
+```
+
+You can also set `NUM_ENVS`, `MAX_ITERATIONS`, `RUN_NAME`, or call `train.py` with `--task=g1_upper_motion_ref --training_stage=joint_finetune` and the same environment variable. If `motion_ref.data_dir` is empty in config, **`MOTION_REF_DATA_DIR` must be set** or the environment will raise at startup.
+
+**Tune** (see `legged_gym/envs/g1/g1_config.py`, class `G1UpperBodyMotionRefCfg`): `motion_ref_dof` scale, `motion_ref.err_reduce` (`mean` vs `sum`), `command_gate`, **`motion_ref.sigma` / `sigma_min` (L² norm scale in rad for joint error vector, curriculum updates `σ ← max(σ_min, min(mean ‖q−q_ref‖₂, σ))`)**, `curriculum_norm_ema_alpha`, etc.
 
 ### 2. Play
 
@@ -76,9 +91,23 @@ python legged_gym/scripts/play.py --task=xxx
 - By default, it loads the latest model from the experiment folder’s last run.
 - You can specify other models using `load_run` and `checkpoint`.
 
+**G1 motion reference policy** (`g1_upper_motion_ref`): set **`MOTION_REF_DATA_DIR`** the same way as training so the env can load motion clips. Do not pass `--headless` if you want the Isaac Gym viewer.
+
+```bash
+export MOTION_REF_DATA_DIR=/path/to/mink/pickles
+
+python legged_gym/scripts/play.py \
+  --task=g1_upper_motion_ref \
+  --training_stage=joint_finetune \
+  --load_run=May13_12-16-09_g1_upper_motion_ref_mink
+```
+
+Optional: `--checkpoint=8000` or `--checkpoint=logs/g1_upper_motion_ref/<run>/model_8000.pt` to pick a specific checkpoint (default: latest `model_*.pt` in that run). Checkpoints live under `logs/g1_upper_motion_ref/<date>_<run_name>/`.
+
 #### 💾 Export Network
 
-Play exports the Actor network, saving it in `logs/{experiment_name}/exported/policies`:
+With the default **`EXPORT_POLICY = True`** flag in `legged_gym/scripts/play.py`, the Actor network is exported into the directory of the loaded checkpoint (same run folder as `model_*.pt`):
+
 - Standard networks (MLP) are exported as `policy_1.pt`.
 - RNN networks are exported as `policy_lstm_1.pt`.
 

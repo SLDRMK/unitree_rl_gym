@@ -5,7 +5,16 @@ from legged_gym.envs.h1.h1_config import H1RoughCfg, H1RoughCfgPPO
 from legged_gym.envs.h1.h1_env import H1Robot
 from legged_gym.envs.h1_2.h1_2_config import H1_2RoughCfg, H1_2RoughCfgPPO
 from legged_gym.envs.h1_2.h1_2_env import H1_2Robot
-from legged_gym.envs.g1.g1_config import G1RoughCfg, G1RoughCfgPPO, G1UpperBodyCfg, G1UpperBodyCfgPPO
+from legged_gym.envs.g1.g1_config import (
+    G1RoughCfg,
+    G1RoughCfgPPO,
+    G1UpperBodyCfg,
+    G1UpperBodyCfgPPO,
+    G1UpperBodyMotionRefCfg,
+    G1UpperBodyMotionRefCfgPPO,
+    G1UpperBodyAmpCfg,
+    G1UpperBodyAmpCfgPPO,
+)
 from legged_gym.envs.g1.g1_env import G1Robot
 from .base.legged_robot import LeggedRobot
 
@@ -16,3 +25,7 @@ task_registry.register( "h1", H1Robot, H1RoughCfg(), H1RoughCfgPPO())
 task_registry.register( "h1_2", H1_2Robot, H1_2RoughCfg(), H1_2RoughCfgPPO())
 task_registry.register( "g1", G1Robot, G1RoughCfg(), G1RoughCfgPPO())
 task_registry.register( "g1_upper", G1Robot, G1UpperBodyCfg(), G1UpperBodyCfgPPO())
+task_registry.register(
+    "g1_upper_motion_ref", G1Robot, G1UpperBodyMotionRefCfg(), G1UpperBodyMotionRefCfgPPO()
+)
+task_registry.register("g1_upper_amp", G1Robot, G1UpperBodyAmpCfg(), G1UpperBodyAmpCfgPPO())

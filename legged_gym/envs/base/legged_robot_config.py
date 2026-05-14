@@ -172,7 +172,6 @@ class LeggedRobotCfg(BaseConfig):
 
 class LeggedRobotCfgPPO(BaseConfig):
     seed = 1
-    runner_class_name = 'OnPolicyRunner'
     class policy:
         init_noise_std = 1.0
         actor_hidden_dims = [512, 256, 128]
@@ -203,6 +202,8 @@ class LeggedRobotCfgPPO(BaseConfig):
         algorithm_class_name = 'PPO'
         num_steps_per_env = 24 # per iteration
         max_iterations = 1500 # number of policy updates
+        # Instantiate as rsl_rl.runners.OnPolicyRunner or legged_gym runners (e.g. OnPolicyRunnerAMP).
+        algo_runner_class = 'OnPolicyRunner'
 
         # logging
         save_interval = 50 # check for potential saves every this many iterations

@@ -241,6 +241,31 @@ class G1UpperBodyCfg( G1RoughCfg ):
             upper_body_periodic = -0.25
             upper_body_motion_vel = 0.025
 
+class G1UpperBodyMotionRefCfg(G1UpperBodyCfg):
+    """档位 A：对照 mink pickle 全局关节相位做运动匹配塑形（不改 PPO/RNN 本体）。"""
+
+    class motion_ref:
+        enabled = True
+        # 设置目录或外层用环境变量 MOTION_REF_DATA_DIR 覆盖（需在启动前传给 Python）。
+        data_dir = ""
+        glob_pattern = "*.pkl"
+        clip_limit = None
+        # σ 为关节误差向量 x=q-q_ref 的 L2 范数尺度（弧度）；每步 σ <- max(sigma_min, min(E[||x||_2], σ))。
+        # 奖励用 mse = mean((q-qref)^2)（见 err_reduce），exp(-mse / σ^2)。
+        sigma = 1.0
+        sigma_min = 0.02
+        err_reduce = "mean"  # "sum" 保留旧语义（会与 29dof 切片缩放不一致，易出现极小 exp）
+        warmup_s = 0.0
+        command_gate = True
+        command_threshold = 0.08
+        curriculum_enabled = True
+        # 对 batch 内各 env 的 ||x||_2 先取均值，再对此标量做 EMA（0 表示不用 EMA，直接用当前步均值）
+        curriculum_norm_ema_alpha = 0.0
+
+    class rewards(G1UpperBodyCfg.rewards):
+        class scales(G1UpperBodyCfg.rewards.scales):
+            motion_ref_dof = 0.6
+
 class G1RoughCfgPPO( LeggedRobotCfgPPO ):
     class policy:
         init_noise_std = 0.8
@@ -271,4 +296,44 @@ class G1UpperBodyCfgPPO( G1RoughCfgPPO ):
         run_name = ''
         experiment_name = 'g1_upper'
 
-  
+class G1UpperBodyMotionRefCfgPPO(G1UpperBodyCfgPPO):
+    class runner(G1UpperBodyCfgPPO.runner):
+        experiment_name = 'g1_upper_motion_ref'
+
+
+class G1UpperBodyAmpCfg(G1UpperBodyMotionRefCfg):
+    """AMP：用判别器对齐 mink 参考动作分布（多帧关节特征），不使用逐步追踪 q≈q_ref。
+
+    motion_ref 仍用于加载数据集；motion_ref_dof 奖励关闭。
+    """
+
+    class rewards(G1UpperBodyMotionRefCfg.rewards):
+        class scales(G1UpperBodyMotionRefCfg.rewards.scales):
+            motion_ref_dof = 0.0
+
+    class amp:
+        enabled = True
+        # 判别器看的「扩张」帧数：沿时间串联 (q−q₀)·s_q 与 q̇·s_v
+        history_frames = 4
+        hidden_dims = [512, 256]
+        activation = 'elu'
+        disc_learning_rate = 3e-4
+        disc_weight_decay = 0.0
+        num_updates_per_iteration = 5
+        disc_minibatches = 4
+        disc_grad_norm = 1.0
+        label_smoothing = 0.1
+        # r_amp = reward_scale · (−log(1 − σ(D logits)))
+        reward_scale = 1.0
+        reward_log_eps = 1e-8
+
+
+class G1UpperBodyAmpCfgPPO(G1UpperBodyMotionRefCfgPPO):
+    class runner(G1UpperBodyMotionRefCfgPPO.runner):
+        experiment_name = 'g1_upper_amp'
+        algo_runner_class = 'OnPolicyRunnerAMP'
+
+    class amp(G1UpperBodyAmpCfg.amp):
+        """训练侧与 env 对齐的 AMP 超参字典（class_to_dict 展开）"""
+        pass
+

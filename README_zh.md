@@ -45,7 +45,7 @@ python legged_gym/scripts/train.py --task=xxx
 ```
 
 #### ⚙️  参数说明
-- `--task`: 必选参数，值可选(go2, g1, h1, h1_2)
+- `--task`: 必选参数；常用 `go2`, `g1`, `h1`, `h1_2`，G1 全身另见 `g1_upper`、`g1_upper_motion_ref`（下文「G1 分阶段训练」「参考运动」）
 - `--headless`: 默认启动图形界面，设为 true 时不渲染图形界面（效率更高）
 - `--resume`: 从日志中选择 checkpoint 继续训练
 - `--experiment_name`: 运行/加载的 experiment 名称
@@ -95,6 +95,22 @@ bash legged_gym/scripts/train_g1_fullbody_isaaclab.sh
 该脚本使用 `g1_upper` 任务和 `joint_finetune` 阶段，不加载下半身 checkpoint，策略直接输出 23 维动作。
 当前示例日志目录为 `logs/g1_upper/May02_11-49-23_fullbody_isaaclab_randomized`。
 全身阶段默认保持原版 G1 风格的域随机化、观测噪声和 PPO 探索噪声：摩擦随机化 `[0.1, 1.25]`、base mass 随机化 `[-1, 3]`、push 随机化开启、观测噪声开启、`init_noise_std=0.8`、`action_scale=0.25`。`joint_finetune` 阶段会使用随机关节初始位置 reset，避免策略只适应默认站姿。
+
+#### G1 参考运动（档位 A：运动匹配塑形）
+
+独立于 `g1_upper` 的任务 **`g1_upper_motion_ref`**：在全身 `joint_finetune` 上增加对照 mink 重定向行走数据的关节参考奖励（数据为 `convert_fit_motion.py` 产出的 `*_poses.pkl` 等）。实验目录名为 **`g1_upper_motion_ref`**，日志在 `logs/g1_upper_motion_ref/`。
+
+训练前必须指定动作数据目录（与训练脚本内默认可改）：
+
+```bash
+export MOTION_REF_DATA_DIR=/path/to/mink/pickles   # 例如 AMASS 管线下的 retargeted_motion_data/mink
+
+bash legged_gym/scripts/train_g1_upper_motion_ref.sh
+```
+
+也可自行调用 `python legged_gym/scripts/train.py --task=g1_upper_motion_ref --training_stage=joint_finetune ...`。若配置里 `motion_ref.data_dir` 为空，则依赖环境变量 **`MOTION_REF_DATA_DIR`**，否则环境初始化会报错。
+
+超参见 `legged_gym/envs/g1/g1_config.py` 中的 `G1UpperBodyMotionRefCfg`：`motion_ref_dof` 权重、`motion_ref.err_reduce`、**σ 为关节误差向量 L2 范数尺度（rad），课程按 `σ ← max(σ_min, min(batch均值‖q−q_ref‖₂, σ))` 更新，奖励为 `exp(−mse/σ²)`**、`curriculum_norm_ema_alpha` 等。
 
 ---
 
@@ -150,7 +166,20 @@ python legged_gym/scripts/play.py \
   --checkpoint=10000
 ```
 
-注意：`lower_body_checkpoint` 必须使用训练 checkpoint（`model_*.pt`），不要使用导出的 TorchScript 文件（`policy_lstm_1.pt`）。
+**G1 参考运动策略**（`g1_upper_motion_ref`）：与训练时相同，需设置 **`MOTION_REF_DATA_DIR`** 指向 mink pickle 目录，否则无法创建环境。需要图形界面时不要加 `--headless`。
+
+```bash
+export MOTION_REF_DATA_DIR=/path/to/mink/pickles
+
+python legged_gym/scripts/play.py \
+  --task=g1_upper_motion_ref \
+  --training_stage=joint_finetune \
+  --load_run=May13_12-16-09_g1_upper_motion_ref_mink
+```
+
+可选：`--checkpoint=8000`，或 `--checkpoint=logs/g1_upper_motion_ref/May13_12-16-09_g1_upper_motion_ref_mink/model_8000.pt` 指定权重；默认加载该 run 下最新的 `model_*.pt`。
+
+上述 `upper_body` 组合 Play 时：`lower_body_checkpoint` 必须使用训练 checkpoint（`model_*.pt`），不要使用导出的 TorchScript 文件（`policy_lstm_1.pt`）。
   
 ### Play 效果
 
