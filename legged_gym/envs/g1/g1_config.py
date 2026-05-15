@@ -315,8 +315,8 @@ class G1UpperBodyAmpCfg(G1UpperBodyMotionRefCfg):
         enabled = True
         # 判别器看的「扩张」帧数：沿时间串联 (q−q₀)·s_q 与 q̇·s_v
         history_frames = 4
-        hidden_dims = [512, 256]
-        # hidden_dims = [128, 128]
+        # hidden_dims = [512, 256]
+        hidden_dims = [128, 128]
         activation = 'elu'
         # disc_learning_rate = 3e-4
         disc_learning_rate = 1e-5
