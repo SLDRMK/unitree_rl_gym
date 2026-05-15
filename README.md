@@ -79,7 +79,7 @@ You can also set `NUM_ENVS`, `MAX_ITERATIONS`, `RUN_NAME`, or call `train.py` wi
 
 #### G1: AMP-style motion prior (optional)
 
-Task **`g1_upper_amp`** uses an **AMP-style discriminator** instead of dense per-step tracking of reference joint angles: the discriminator classifies stacked **multi-frame joint features** (scaled relative `dof_pos` and `dof_vel`) from simulator rollouts vs expert trajectories sampled from the same mink pickles. Rewards add **r_amp = −log(clamp(1 − σ(D(x)), eps))** scaled by **`cfg.amp.reward_scale`**; discriminator training uses **binary cross-entropy with label smoothing**.
+Task **`g1_upper_amp`** uses an **AMP-style discriminator** instead of dense per-step tracking of reference joint angles (**`motion_ref_dof` scale is 0** on this task): the discriminator classifies stacked **multi-frame joint features** (scaled relative `dof_pos` and `dof_vel`) from simulator rollouts vs expert trajectories sampled from the same mink pickles. Rewards add **λ_amp · (−log(clamp(1 − σ(D(x)), eps)))**; **λ_amp** is scheduled by default (see below). Discriminator training uses **binary cross-entropy with label smoothing**. When **λ_amp** is at or below **`min_scale_for_amp_disc`** (default 0), **no discriminator forward pass or update** runs for that iteration (pure PPO walking phase).
 
 - Experiment folder: **`logs/g1_upper_amp/`**
 - Train script (repo root):
@@ -92,7 +92,7 @@ bash legged_gym/scripts/train_g1_upper_amp.sh
 
 Equivalent: `python legged_gym/scripts/train.py --task=g1_upper_amp --training_stage=joint_finetune ...`. Same **`MOTION_REF_DATA_DIR`** (or filled `motion_ref.data_dir`) as `g1_upper_motion_ref` so clips load.
 
-Tune **`G1UpperBodyAmpCfg` / nested `amp`** (and mirrored `train_cfg`): `history_frames`, `hidden_dims`, `label_smoothing`, `reward_scale`, `disc_learning_rate`, `num_updates_per_iteration`, etc. Checkpoints **`model_*.pt` also contain discriminator weights** (`discriminator_state_dict`) for `--resume`.
+Tune **`G1UpperBodyAmpCfg` / nested `amp`** (and mirrored `train_cfg`): **`curriculum_enabled`**, **`reward_scale_schedule_iters`** (list of `(learning_iteration, λ_amp)` milestones; default follows a small-AMP → ramp → ~0.1–0.25 pattern for 10k iters), **`curriculum_interp_between_milestones`** (linear ramp between milestones), **`min_scale_for_amp_disc`**, plus `history_frames`, `hidden_dims`, `label_smoothing`, constant fallback **`reward_scale`** when curriculum is off, `disc_learning_rate`, `num_updates_per_iteration`, etc. Checkpoints **`model_*.pt` also contain discriminator weights** (`discriminator_state_dict`) for `--resume`. TensorBoard: **`AMP/lambda_amp`**, **`AMP/mean_step_amp_scaled`**.
 
 ### 2. Play
 

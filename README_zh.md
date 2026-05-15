@@ -117,8 +117,8 @@ bash legged_gym/scripts/train_g1_upper_motion_ref.sh
 任务 **`g1_upper_amp`**：在全身 **`joint_finetune`** 上，用判别器对齐 mink pickle 里的专家关节轨迹分布，而不是逐步追踪 \(q\simeq q_\mathrm{ref}\)。
 
 - **多帧扩张输入**：判别器输入为若干历史步上拼接的 **关节相对默认位姿的缩放 dof_pos、dof_vel**（与训练中观测缩放一致）。
-- **策略回报**：在每步仿真回报上叠加 **\(r_{\mathrm{amp}} = -\log(1 - D(\cdot))\)**（实现对 `sigmoid(logits)` 后的概率，并有 `clamp` 与可调 **`reward_scale`**）。
-- **判别器训练**：`BCEWithLogitsLoss`；专家样本目标 **`1 - label_smoothing`**，策略 rollout 样本目标 **`label_smoothing`**（标签平滑）。
+- **策略回报**：在每步仿真回报上叠加 **\(\lambda_{\mathrm{amp}} \cdot (-\log(1 - D(\cdot)))\)**（概率来自 `sigmoid(logits)`，含 `clamp`）。**\(\lambda_{\mathrm{amp}}\)** 默认按 **learning iteration 分段课程** 逐渐加大（见下）；关闭课程时用常数 **`reward_scale`**。
+- **判别器训练**：`BCEWithLogitsLoss`；专家样本目标 **`1 - label_smoothing`**，策略 rollout 样本目标 **`label_smoothing`**。当 **\(\lambda_{\mathrm{amp}} \le \texttt{min\_scale\_for\_amp\_disc}\)**（默认 0）时，该迭代 **不跑判别器前向与更新**（纯 PPO 行走阶段）。
 - **实验目录**：`g1_upper_amp`，权重与日志位于 **`logs/g1_upper_amp/`**；checkpoint 内含 **判别器与其优化器**，便于 **`--resume`**。
 
 训练脚本（仓库根目录）：
@@ -131,7 +131,7 @@ bash legged_gym/scripts/train_g1_upper_amp.sh
 
 等价调用：`python legged_gym/scripts/train.py --task=g1_upper_amp --training_stage=joint_finetune ...`。同样需要 **`MOTION_REF_DATA_DIR`**（或配置里写明 `motion_ref.data_dir`）以加载 mink clip。
 
-超参见 `legged_gym/envs/g1/g1_config.py` 中的 **`G1UpperBodyAmpCfg`** 及其嵌套 **`amp`**：`history_frames`、`hidden_dims`、`label_smoothing`、`reward_scale`、判别器学习率、`num_updates_per_iteration` 等；`motion_ref_dof` 奖励在该任务中为 **0**。
+超参见 `legged_gym/envs/g1/g1_config.py` 中的 **`G1UpperBodyAmpCfg`** 及其嵌套 **`amp`**：**`curriculum_enabled`**、**`reward_scale_schedule_iters`**（`(迭代阈值, λ_amp)` 列表，默认约 10k 迭代下：先纯 PPO，再小幅 AMP，再逐级抬升到约 0.25）、**`curriculum_interp_between_milestones`**（里程碑间线性插值 λ）、**`min_scale_for_amp_disc`**，以及 `history_frames`、`hidden_dims`、`label_smoothing`、`disc_learning_rate` 等。**`motion_ref_dof` = 0，不启用关节参考追踪塑形**。
 
 ---
 

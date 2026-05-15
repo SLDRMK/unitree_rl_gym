@@ -304,7 +304,7 @@ class G1UpperBodyMotionRefCfgPPO(G1UpperBodyCfgPPO):
 class G1UpperBodyAmpCfg(G1UpperBodyMotionRefCfg):
     """AMP：用判别器对齐 mink 参考动作分布（多帧关节特征），不使用逐步追踪 q≈q_ref。
 
-    motion_ref 仍用于加载数据集；motion_ref_dof 奖励关闭。
+    motion_ref 仍用于加载专家 clip；motion_ref_dof=0（不启用关节参考追踪奖励）。
     """
 
     class rewards(G1UpperBodyMotionRefCfg.rewards):
@@ -316,16 +316,45 @@ class G1UpperBodyAmpCfg(G1UpperBodyMotionRefCfg):
         # 判别器看的「扩张」帧数：沿时间串联 (q−q₀)·s_q 与 q̇·s_v
         history_frames = 4
         hidden_dims = [512, 256]
+        # hidden_dims = [128, 128]
         activation = 'elu'
-        disc_learning_rate = 3e-4
+        # disc_learning_rate = 3e-4
+        disc_learning_rate = 1e-5
         disc_weight_decay = 0.0
-        num_updates_per_iteration = 5
+        # num_updates_per_iteration = 5
+        num_updates_per_iteration = 1
         disc_minibatches = 4
         disc_grad_norm = 1.0
         label_smoothing = 0.1
-        # r_amp = reward_scale · (−log(1 − σ(D logits)))
-        reward_scale = 1.0
         reward_log_eps = 1e-8
+
+        # 判别训练：准确率超阈值则跳过优化（降至阈值以下再继续），抑制 D 过快过拟合
+        disc_stop_train_accuracy_above = 0.85  # ≤0 关闭门控（始终更新）
+        # 负样本 = 本轮 rollout + 特征池。容量：-1 自动；0 关闭。-1 时 cap=max(8192, 8×steps×envs)
+        fake_amp_pool_capacity_rows = -1
+        # 合并后超容量时 True：从 [旧∪新] 无放回均匀抽满容量（随机淘汰部分旧/新）；False：FIFO 只保留末尾
+        fake_pool_overflow_resample = True
+        fake_pool_mix_fraction = 0.5  # 每个 fake minibatch 中从池中采样的比例（余下来自当前 rollout）
+        # 判别器输入随机 mask（仅训练时）；每维独立Bernoulli置 0；0 关闭
+        train_feature_mask_prob = 0.1
+
+        # ---- λ_amp 课程（与 reward_scale_schedule_iters 第一项对齐；关闭课程时用 reward_scale 常数）----
+        curriculum_enabled = True
+        # True：在里程碑之间对 λ_amp 线性插值；False：阶梯常数（每个 milestone 生效到下一里程碑）
+        curriculum_interp_between_milestones = False
+        # (learning_iteration ≥ 阈值, λ_amp)；参考：Phase0 纯 PPO；Phase1 小 AMP 0.02~0.05；Phase2 抬到 0.1→0.2；终值常用 0.1~0.3
+        # 以下默认值按 runner.max_iterations=10000；短训请按比例前移 milestone。
+        reward_scale_schedule_iters = (
+            (0, 0.0),
+            (2000, 0.035),
+            (5000, 0.10),
+            (7000, 0.20),
+            (8500, 0.25),
+        )
+        # curriculum_enabled=False 时作为固定 λ_amp
+        reward_scale = 0.25
+        # λ_amp≤此值时不跑判别器前向与更新（通常为 0：Phase0 纯 PPO）
+        min_scale_for_amp_disc = 0.0
 
 
 class G1UpperBodyAmpCfgPPO(G1UpperBodyMotionRefCfgPPO):
