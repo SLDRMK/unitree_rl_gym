@@ -6,22 +6,75 @@
 </div>
 
 <p align="center">
-  🎮🚪 <strong>这是一个基于 Unitree 机器人实现强化学习的示例仓库，支持 Unitree Go2、H1、H1_2和 G1。</strong> 🚪🎮
+  🎮🚪 <strong>面向 Unitree Go2、H1、H1_2、G1 的强化学习示例与训练代码。</strong><br/>
+  本 fork 的<strong>主线</strong>是使用 <strong>AMP 式判别器塑形</strong> 做 G1 全身行走，使人形步态接近经重定向的人类行走数据；传统的 <strong>PPO 里程计/速度跟踪</strong>（<code>g1</code>、无运动先验的 <code>g1_upper</code> 等）保留为 <strong>baseline</strong>。<strong><code>g1_upper_motion_ref</code></strong>（逐步关节参考追踪塑形）在本仓库中标记为<strong>未走通的尝试</strong>，仅保留可复现入口，<strong>不推荐</strong>作为主要方案。
 </p>
-
-<div align="center">
-
-| <div align="center"> Isaac Gym </div> | <div align="center">  Mujoco </div> |  <div align="center"> Physical </div> |
-|--- | --- | --- |
-| [<img src="https://oss-global-cdn.unitree.com/static/32f06dc9dfe4452dac300dda45e86b34.GIF" width="240px">](https://oss-global-cdn.unitree.com/static/5bbc5ab1d551407080ca9d58d7bec1c8.mp4) | [<img src="https://oss-global-cdn.unitree.com/static/244cd5c4f823495fbfb67ef08f56aa33.GIF" width="240px">](https://oss-global-cdn.unitree.com/static/5aa48535ffd641e2932c0ba45c8e7854.mp4) | [<img src="https://oss-global-cdn.unitree.com/static/78c61459d3ab41448cfdb31f6a537e8b.GIF" width="240px">](https://oss-global-cdn.unitree.com/static/0818dcf7a6874b92997354d628adcacd.mp4) |
-
-</div>
-
----
 
 ## 📦 安装配置
 
 安装和配置步骤请参考 [setup.md](/doc/setup_zh.md)
+
+## 🎯 数据：AMASS 行走子集
+
+专家动作来自 [**AMASS**](https://amass.is.tue.mpg.de/)，需在 [官方下载页注册后获取](https://amass.is.tue.mpg.de/download.php)。本工作流仅使用 **BMLrub**、**CMU**、**KIT** 三个子集（与下文「行走筛选」一致）。分发或发表论文时请遵守 AMASS **许可与引用**要求。
+
+**示例 — CMU Subject 07 SMPL 姿态渲染** · 源文件 [`pics/07_01_poses_render.mp4`](pics/07_01_poses_render.mp4)
+
+<video src="pics/07_01_poses_render.mp4" controls muted playsinline width="720"></video>
+
+## 🔄 动作重定向（两条管线）
+
+`g1_upper_amp` / `g1_upper_motion_ref` 使用的专家轨迹需将人体动作重定向到 Unitree G1。我们维护两个关联仓库，并实现**一致的行走子集筛选**（名称规则 + 运动统计），保证训练侧 clip 集合可对齐。
+
+### 1） [SLDRMK/AMASS-POST-PROCESS](https://github.com/SLDRMK/AMASS-POST-PROCESS)
+
+- **Fork 自** [TeleHuman/PBHC](https://github.com/TeleHuman/PBHC)（KungfuBot / PBHC 运动处理链路）。
+- **核心代码：** [`smpl_retarget/`](https://github.com/SLDRMK/AMASS-POST-PROCESS/tree/main/smpl_retarget)，基于 [Mink](https://github.com/kevinzakka/mink) 的微分 IK 重定向（`mink_retarget/convert_fit_motion.py`），融合了 MaskedMimic / PHC 思路。
+- **本 fork 改进要点（摘要）：** 重写**相对位置** `FrameTask`（在 SMPL 父关节局部帧内取骨方向）；增加 **`TorsoUprightTask`**（约束 pelvis / torso / head 等单位竖直方向，抑制侧倾）；代价权重重调（`ROOT_*`、`RELATIVE_*`、`POSTURE_SCALE`、`TORSO_UPRIGHT_SCALE` 等）。成功重定向后的**整段聚合 pickle** 写入 `smpl_retarget/retargeted_motion_data/mink_adjust/<stem>.pkl`（与 `walking_candidates.jsonl` 中 `mink_aggregate_*` 字段一致）。
+- **修改动机：** 原版 PBHC 系 Mink 栈在片面追求全局 SMPL 关键点贴合时，容易出现 **腿型内八（膝/踝内收）**、**躯干佝偻前倾**、**大臂夹着身体摆动不开**等次生姿态；上述相对骨长约束与躯干直立项即针对这些问题补强。
+
+**示例 — Mink IK 重定向（本 fork）** · 源文件 [`pics/mink_retarget.webm`](pics/mink_retarget.webm)
+
+<video src="pics/mink_retarget.webm" controls muted playsinline width="720"></video>
+
+**行走 / 数据集筛选（`convert_fit_motion.py`，`--filter-walking` / `--filter-only`）：**
+
+- **跳过目录名** 含 `retarget`、`smpl` 或 `h1` 的子目录。
+- **扫描** `**/*.npz` 与 `**/*.pkl`；固定跳过 `shape.npz` 与含 `stagei` 等规则见上游 README。
+- **名称门控（当前策略启用的数据集）：**
+  - **CMU** — 仅被试 **`07`、`08`、`17`、`35`、`39`**；
+  - **KIT** — 文件名须含 `walk`；
+  - **BMLrub / BioMotionLab_NTroje** — 须匹配 `*_normal_walk*_poses.npz`（不区分大小写的 glob）；
+  - 其它数据集目录 → 当前行走策略下**直接拒绝**。
+- **运动门控：** 根节点平移平均速度 ∈ **[0.3, 2.0] m/s**（Typer 默认）；对水平向主导位移做 FFT，主频 ∈ **0.4–3.0 Hz** 且谱峰 ≥ 带内中位数的 **3 倍**。
+
+完整说明见：[AMASS-POST-PROCESS `smpl_retarget/README.md`](https://github.com/SLDRMK/AMASS-POST-PROCESS/blob/main/smpl_retarget/README.md)（克隆后本地路径：`AMASS-POST-PROCESS/smpl_retarget/README.md`）。
+
+### 2） [SLDRMK/GMR](https://github.com/SLDRMK/GMR)
+
+- **Fork 自** [YanjieZe/GMR](https://github.com/YanjieZe/GMR)。
+- **为何 GMR 往往效果更好（简述）：** GMR 将重定向视作**全身** IK/优化问题，目标与正则（含默认 **关节速度限幅**、防「锁在一侧」的过拟合惩罚等）偏向 **可对 RL 跟踪友好、物理上不过分扭曲**的解，而不是单帧无止境地「硬贴 SMPL」。这在同一套行走筛选数据上，通常能进一步减轻 **内八、含胸夹臂、局部姿态坍缩** 等局部极小。我们经验上 G1 的观感 **更自然、更顺滑**。
+
+**示例 — GMR 重定向** · 源文件 [`pics/gmr_retarget.webm`](pics/gmr_retarget.webm)
+
+<video src="pics/gmr_retarget.webm" controls muted playsinline width="720"></video>
+
+- **批量 SMPL-X → 机器人：** `scripts/smplx_to_robot_dataset.py`，加 **`--filter_walking`**，`--src_folder` 指向 AMASS 式根目录（其下含 **`CMU/`**、**`KIT/`**、**`BMLrub/`** 等）。
+- **名称筛选（与 `convert_fit_motion.py` 的设计意图对齐）：**
+
+| 数据集目录 | 规则 |
+|-----------|------|
+| **CMU** | 被试 **07, 08, 17, 35, 39** |
+| **BMLrub** / BioMotionLab_NTroje | `*_normal_walk*_poses.npz` 或 `*_normal_walk*_stageii.npz` |
+| **KIT**（目录名含 `kit`） | 文件名须含 `walk` |
+
+- **运动门控：** 通过名称筛选后，速度与 FFT 周期性与上表 AMASS-POST-PROCESS 一致（默认 **0.3–2.0 m/s**，**0.4–3 Hz**，峰/中位 ≥ **3**）。
+
+- **额外批量排除（与该 fork 脚本内恒开逻辑一致）：** `assets/hard_motions/*.txt` 列出的难例 basename，或文件名子串含 `BMLrub`、`EKUT`、`crawl`、`_lie`、`upstairs`、`downstairs` 等，在批量处理前移除。
+
+详见：[GMR README — SMPL-X 重定向与 `--filter_walking`](https://github.com/SLDRMK/GMR/blob/main/README.md)。
+
+将本仓库训练/Play 所用的 **`MOTION_REF_DATA_DIR`** 指到包含重定向 **`*.pkl`** 的目录（需满足 [`legged_gym.utils.mink_reference_motion`](legged_gym/utils/mink_reference_motion.py) 的扫描约定）。
 
 ## 🔁 流程说明
 
@@ -34,6 +87,8 @@
 - **Sim2Sim**: 将 Gym 训练完成的策略部署到其他仿真器，避免策略小众于 Gym 特性。
 - **Sim2Real**: 将策略部署到实物机器人，实现运动控制。
 
+若目标是 **类人行走步态**：数据与重定向见上文章节，训练主推 **`g1_upper_amp`**；传统 **`g1` / `g1_upper`** 仍可作为**无运动先验**对照 baseline。
+
 ## 🛠️ 使用指南
 
 ### 1. 训练
@@ -45,7 +100,7 @@ python legged_gym/scripts/train.py --task=xxx
 ```
 
 #### ⚙️  参数说明
-- `--task`: 必选参数；常用 `go2`, `g1`, `h1`, `h1_2`，G1 全身另见 `g1_upper`、`g1_upper_motion_ref`、`g1_upper_amp`（下文「G1 分阶段训练」「参考运动」「AMP」）
+- `--task`: 必选参数；常用 `go2`, `g1`, `h1`, `h1_2`。G1 全身：**`g1_upper_amp`**（本文主线判别器 AMP）、**`g1_upper`**（分阶段 baseline）、**`g1_upper_motion_ref`**（遗留逐步参考塑形，不推荐）。
 - `--headless`: 默认启动图形界面，设为 true 时不渲染图形界面（效率更高）
 - `--resume`: 从日志中选择 checkpoint 继续训练
 - `--experiment_name`: 运行/加载的 experiment 名称
@@ -104,9 +159,9 @@ bash legged_gym/scripts/train_g1_fullbody_isaaclab.sh
 当前示例日志目录为 `logs/g1_upper/May02_11-49-23_fullbody_isaaclab_randomized`。
 全身阶段默认保持原版 G1 风格的域随机化、观测噪声和 PPO 探索噪声：摩擦随机化 `[0.1, 1.25]`、base mass 随机化 `[-1, 3]`、push 随机化开启、观测噪声开启、`init_noise_std=0.8`、`action_scale=0.25`。`joint_finetune` 阶段会使用随机关节初始位置 reset，避免策略只适应默认站姿。
 
-#### G1 参考运动（档位 A：运动匹配塑形）
+#### G1 参考运动（遗留：逐步关节追踪，非推荐）
 
-独立于 `g1_upper` 的任务 **`g1_upper_motion_ref`**：在全身 `joint_finetune` 上增加对照 mink 重定向行走数据的关节参考奖励（数据为 `convert_fit_motion.py` 产出的 `*_poses.pkl` 等）。实验目录名为 **`g1_upper_motion_ref`**，日志在 `logs/g1_upper_motion_ref/`。
+可选任务 **`g1_upper_motion_ref`**：对 mink 生成的轨迹做**逐步**关节参考塑形。在本项目设定下**效果不如 `g1_upper_amp`**，仅保留以便对照与复现。**不建议**作为主线方案。日志：`logs/g1_upper_motion_ref/`。
 
 训练前必须指定动作数据目录（与训练脚本内默认可改）：
 
@@ -120,9 +175,9 @@ bash legged_gym/scripts/train_g1_upper_motion_ref.sh
 
 超参见 `legged_gym/envs/g1/g1_config.py` 中的 `G1UpperBodyMotionRefCfg`：`motion_ref_dof` 权重、`motion_ref.err_reduce`、**σ 为关节误差向量 L2 范数尺度（rad），课程按 `σ ← max(σ_min, min(batch均值‖q−q_ref‖₂, σ))` 更新，奖励为 `exp(−mse/σ²)`**、`curriculum_norm_ema_alpha` 等。
 
-#### G1 AMP（判别器对抗式运动先验，可选）
+#### G1 AMP（判别器对抗式运动先验，**推荐的主线模仿**）
 
-任务 **`g1_upper_amp`**：在全身 **`joint_finetune`** 上，用判别器对齐 mink pickle 里的专家关节轨迹分布，而不是逐步追踪 \(q\simeq q_\mathrm{ref}\)。
+任务 **`g1_upper_amp`**：**推荐**使用判别器对齐专家关节分布，**不**使用稠密 **`motion_ref_dof`** 逐步追踪奖励。专家轨迹来自上文 **「动作重定向」** 任一管线产出的 pickle。
 
 - **多帧扩张输入**：判别器输入为若干历史步上拼接的 **关节相对默认位姿的缩放 dof_pos、dof_vel**（与训练中观测缩放一致）。
 - **策略回报**：在每步仿真回报上叠加 **\(\lambda_{\mathrm{amp}} \cdot (-\log(1 - D(\cdot)))\)**（概率来自 `sigmoid(logits)`，含 `clamp`）。**\(\lambda_{\mathrm{amp}}\)** 默认按 **learning iteration 分段课程** 逐渐加大（见下）；关闭课程时用常数 **`reward_scale`**。
@@ -223,14 +278,6 @@ python legged_gym/scripts/play.py \
 
 可选：`--checkpoint` 填迭代序号或 **`logs/g1_upper_amp/<date>_<run_name>/model_*.pt`** 完整路径。
 
-### Play 效果
-
-| Go2 | G1 | H1 | H1_2 |
-|--- | --- | --- | --- |
-| [![go2](https://oss-global-cdn.unitree.com/static/ba006789e0af4fe3867255f507032cd7.GIF)](https://oss-global-cdn.unitree.com/static/d2e8da875473457c8d5d69c3de58b24d.mp4) | [![g1](https://oss-global-cdn.unitree.com/static/32f06dc9dfe4452dac300dda45e86b34.GIF)](https://oss-global-cdn.unitree.com/static/5bbc5ab1d551407080ca9d58d7bec1c8.mp4) | [![h1](https://oss-global-cdn.unitree.com/static/fa04e73966934efa9838e9c389f48fa2.GIF)](https://oss-global-cdn.unitree.com/static/522128f4640c4f348296d2761a33bf98.mp4) |[![h1_2](https://oss-global-cdn.unitree.com/static/83ed59ca0dab4a51906aff1f93428650.GIF)](https://oss-global-cdn.unitree.com/static/15fa46984f2343cb83342fd39f5ab7b2.mp4)|
-
----
-
 ### 3. Sim2Sim (Mujoco)
 
 支持在 Mujoco 仿真器中运行 Sim2Sim：
@@ -291,15 +338,6 @@ python deploy/deploy_mujoco/deploy_mujoco.py g1.yaml \
 
 参数：**`--camera-follow-side`** `none|right|left`，**`--camera-follow-distance`**，**`--camera-track-body`**（MJCF 中 `<body name=...>`，默认 `pelvis`），**`--camera-follow-elevation`**，可选 **`--camera-follow-azimuth`** 校正左右观感。
 
-#### 运行效果
-
-| G1 | H1 | H1_2 |
-|--- | --- | --- |
-| [![mujoco_g1](https://oss-global-cdn.unitree.com/static/244cd5c4f823495fbfb67ef08f56aa33.GIF)](https://oss-global-cdn.unitree.com/static/5aa48535ffd641e2932c0ba45c8e7854.mp4)  |  [![mujoco_h1](https://oss-global-cdn.unitree.com/static/7ab4e8392e794e01b975efa205ef491e.GIF)](https://oss-global-cdn.unitree.com/static/8934052becd84d08bc8c18c95849cf32.mp4)  |  [![mujoco_h1_2](https://oss-global-cdn.unitree.com/static/2905e2fe9b3340159d749d5e0bc95cc4.GIF)](https://oss-global-cdn.unitree.com/static/ee7ee85bd6d249989a905c55c7a9d305.mp4) |
-
-
----
-
 ### 4. Sim2Real (实物部署)
 
 实现实物部署前，确保机器人进入调试模式。详细步骤请参考 [实物部署指南](deploy/deploy_real/README.zh.md)：
@@ -312,12 +350,6 @@ python deploy/deploy_real/deploy_real.py {net_interface} {config_name}
 - `net_interface`: 连接机器人网卡名称，如 `enp3s0`
 - `config_name`: 配置文件，存在于 `deploy/deploy_real/configs/`，如 `g1.yaml`，`h1.yaml`，`h1_2.yaml`
 
-#### 运行效果
-
-| G1 | H1 | H1_2 |
-|--- | --- | --- |
-| [![real_g1](https://oss-global-cdn.unitree.com/static/78c61459d3ab41448cfdb31f6a537e8b.GIF)](https://oss-global-cdn.unitree.com/static/0818dcf7a6874b92997354d628adcacd.mp4) | [![real_h1](https://oss-global-cdn.unitree.com/static/fa07b2fd2ad64bb08e6b624d39336245.GIF)](https://oss-global-cdn.unitree.com/static/ea0084038d384e3eaa73b961f33e6210.mp4) | [![real_h1_2](https://oss-global-cdn.unitree.com/static/a88915e3523546128a79520aa3e20979.GIF)](https://oss-global-cdn.unitree.com/static/12d041a7906e489fae79d55b091a63dd.mp4) |
-
 ---
 
 ## 🎉  致谢
@@ -325,6 +357,9 @@ python deploy/deploy_real/deploy_real.py {net_interface} {config_name}
 本仓库开发离不开以下开源项目的支持与贡献，特此感谢：
 
 - [legged\_gym](https://github.com/leggedrobotics/legged_gym): 构建训练与运行代码的基础。
+- [PBHC](https://github.com/TeleHuman/PBHC) / [AMASS-POST-PROCESS fork](https://github.com/SLDRMK/AMASS-POST-PROCESS): Mink SMPL→机器人重定向管线。
+- [GMR](https://github.com/YanjieZe/GMR) / [SLDRMK fork](https://github.com/SLDRMK/GMR): 另一套 SMPL-X 批量重定向与行走筛选。
+- [AMASS](https://amass.is.tue.mpg.de/): 人体动作数据（本工作流使用 BMLrub / CMU / KIT 子集）。
 - [rsl\_rl](https://github.com/leggedrobotics/rsl_rl.git): 强化学习算法实现。
 - [mujoco](https://github.com/google-deepmind/mujoco.git): 提供强大仿真功能。
 - [unitree\_sdk2\_python](https://github.com/unitreerobotics/unitree_sdk2_python.git): 实物部署硬件通信接口。

@@ -6,22 +6,75 @@
 </div>
 
 <p align="center">
-  <strong>This is a repository for reinforcement learning implementation based on Unitree robots, supporting Unitree Go2, H1, H1_2, and G1.</strong> 
+  <strong>Unitree-focused RL stack for Go2 / H1 / H1_2 / G1.</strong><br/>
+  In this fork, the <strong>main line</strong> is full-body Unitree G1 locomotion trained with <strong>AMP-style</strong> (discriminator-shaped) imitation so the gait stays close to human walking from retargeted AMASS clips. The original <strong>standard PPO</strong> tasks (<code>g1</code>, <code>g1_upper</code> without motion prior) remain as <strong>baselines</strong>. The alternate task <strong><code>g1_upper_motion_ref</code></strong> (dense per-step reference-joint shaping) was kept only as documentation of an <strong>unsuccessful</strong> approach for our setup—not the recommended path.
 </p>
-
-<div align="center">
-
-| <div align="center"> Isaac Gym </div> | <div align="center">  Mujoco </div> |  <div align="center"> Physical </div> |
-|--- | --- | --- |
-| [<img src="https://oss-global-cdn.unitree.com/static/32f06dc9dfe4452dac300dda45e86b34.GIF" width="240px">](https://oss-global-cdn.unitree.com/static/5bbc5ab1d551407080ca9d58d7bec1c8.mp4) | [<img src="https://oss-global-cdn.unitree.com/static/244cd5c4f823495fbfb67ef08f56aa33.GIF" width="240px">](https://oss-global-cdn.unitree.com/static/5aa48535ffd641e2932c0ba45c8e7854.mp4) | [<img src="https://oss-global-cdn.unitree.com/static/78c61459d3ab41448cfdb31f6a537e8b.GIF" width="240px">](https://oss-global-cdn.unitree.com/static/0818dcf7a6874b92997354d628adcacd.mp4) |
-
-</div>
-
----
 
 ## 📦 Installation and Configuration
 
 Please refer to [setup.md](/doc/setup_en.md) for installation and configuration steps.
+
+## 🎯 Data: AMASS walking subsets
+
+We build expert motion from [**AMASS**](https://amass.is.tue.mpg.de/) (registration required on the [official download page](https://amass.is.tue.mpg.de/download.php)). For this project we use the **BMLrub**, **CMU**, and **KIT** subsets only (see walking filters below). Obey AMASS **license and citation** when redistributing or publishing.
+
+**Example — CMU Subject 07 SMPL poses** · source [`pics/07_01_poses_render.mp4`](pics/07_01_poses_render.mp4)
+
+<video src="pics/07_01_poses_render.mp4" controls muted playsinline width="720"></video>
+
+## 🔄 Motion retargeting (two pipelines)
+
+Expert trajectories for `g1_upper_amp` / `g1_upper_motion_ref` must be **retargeted** from human motion to the Unitree G1 model. We maintain two related codebases; both implement a **shared walking subset filter** (name rules + motion statistics) so training sees comparable clip collections.
+
+### 1) [SLDRMK/AMASS-POST-PROCESS](https://github.com/SLDRMK/AMASS-POST-PROCESS)
+
+- **Fork of** [TeleHuman/PBHC](https://github.com/TeleHuman/PBHC) (KungfuBot / PBHC motion processing lineage).
+- **Core code:** [`smpl_retarget/`](https://github.com/SLDRMK/AMASS-POST-PROCESS/tree/main/smpl_retarget) — **Mink** differential IK retargeting (`mink_retarget/convert_fit_motion.py`), building on [Mink](https://github.com/kevinzakka/mink) and ideas from MaskedMimic / PHC-style stacks.
+- **Improvements in this fork (summary):** refactored **relative positional** `FrameTask`s from SMPL parent-local bone directions; **`TorsoUprightTask`** (penalizes lateral tilt of torso / pelvis / head local +Z); retuned costs (`ROOT_*`, `RELATIVE_*`, `POSTURE_SCALE`, `TORSO_UPRIGHT_SCALE`, etc.). Per-clip aggregates are written under `smpl_retarget/retargeted_motion_data/mink_adjust/<stem>.pkl` when using the shipped layout (`walking_candidates.jsonl` references `mink_aggregate_*`).
+- **Motivation:** the stock PBHC-style Mink stack could produce **pigeon‑toed legs**, a **hunched / forward‑leaning torso**, and **arms clamped too close to the body** when SMPL global targets were chased too aggressively without enough relative-bone and upright regularization. The tasks and weights above target those failure modes.
+
+**Example — Mink IK retarget (this fork)** · source [`pics/mink_retarget.webm`](pics/mink_retarget.webm)
+
+<video src="pics/mink_retarget.webm" controls muted playsinline width="720"></video>
+
+**Walking / dataset filter (`convert_fit_motion.py`, `--filter-walking` / `--filter-only`):**
+
+- **Skipped directories:** folder name contains `retarget`, `smpl`, or `h1`.
+- **Scanned files:** recursive `**/*.npz`, `**/*.pkl`; always skip `shape.npz` and `*stagei.npz`-style names per README rules.
+- **Name gate (datasets enabled for walking):**
+  - **CMU** — subjects **`07`, `08`, `17`, `35`, `39`** only.
+  - **KIT** — basename must contain `walk`.
+  - **BMLrub / BioMotionLab_NTroje** — basename must match `*_normal_walk*_poses.npz` (case-insensitive glob).
+  - Other dataset folders → rejected by policy.
+- **Motion gate:** mean root translation speed ∈ **[0.3, 2.0] m/s** (Typer defaults); FFT on dominant horizontal displacement: dominant frequency ∈ **0.4–3.0 Hz** and spectral peak ≥ **3×** median in band.
+
+Full detail: [`AMASS-POST-PROCESS/smpl_retarget/README.md`](https://github.com/SLDRMK/AMASS-POST-PROCESS/blob/main/smpl_retarget/README.md) (local copy if you clone: `AMASS-POST-PROCESS/smpl_retarget/README.md`).
+
+### 2) [SLDRMK/GMR](https://github.com/SLDRMK/GMR)
+
+- **Fork of** [YanjieZe/GMR](https://github.com/YanjieZe/GMR) (General Motion Retargeting).
+- **Why GMR often looks better (brief):** GMR formulates retargeting as a **whole-body** problem with an objective stack tuned for **stable, RL-friendly** robot motion (including default **joint velocity limits** and regularization that discourages joint locking and collapsed postures). That tends to avoid the **local minima** of “match every SMPL target at all costs,” which can still show up as **inward knees**, **rounded back**, or **over-adducted arms** when the per-frame task balance is wrong. In our experience on the same filtered AMASS walking clips, GMR’s solution is **smoother and more natural** for G1.
+
+**Example — GMR retarget** · source [`pics/gmr_retarget.webm`](pics/gmr_retarget.webm)
+
+<video src="pics/gmr_retarget.webm" controls muted playsinline width="720"></video>
+
+- **Batch SMPL-X → robot:** `scripts/smplx_to_robot_dataset.py`. Enable **`--filter_walking`** with `--src_folder` pointing at an AMASS-style root containing **`CMU/`**, **`KIT/`**, **`BMLrub/`**, etc.
+- **Name filter (aligned with `convert_fit_motion.py` intent):**
+
+| Dataset folder | Rule |
+|----------------|------|
+| **CMU** | Subjects **07, 08, 17, 35, 39** |
+| **BMLrub** / BioMotionLab_NTroje | `*_normal_walk*_poses.npz` or `*_normal_walk*_stageii.npz` |
+| **KIT** (folder name contains `kit`) | Filename contains **`walk`** |
+
+- **Motion gate (after name pass):** same speed band **0.3–2.0 m/s** and FFT periodicity check (**0.4–3 Hz**, peak/median ≥ **3**), documented as aligned with AMASS-POST-PROCESS.
+
+- **Extra batch exclusions (always on in that fork):** basenames in `assets/hard_motions/*.txt` lists, or motion name substring matches (`BMLrub`, `EKUT`, `crawl`, `_lie`, `upstairs`, `downstairs`, …) removed before processing.
+
+See upstream docs: [`GMR` README § Retargeting from SMPL-X](https://github.com/SLDRMK/GMR/blob/main/README.md) (walking filter §).
+
+Point **`MOTION_REF_DATA_DIR`** in this repo at the folder that contains your **`*.pkl`** clips (layout expected by [`legged_gym.utils.mink_reference_motion`](legged_gym/utils/mink_reference_motion.py)).
 
 ## 🔁 Process Overview
 
@@ -34,6 +87,8 @@ The basic workflow for using reinforcement learning to achieve motion control is
 - **Sim2Sim**: Deploy the Gym-trained policy to other simulators to ensure it’s not overly specific to Gym characteristics.
 - **Sim2Real**: Deploy the policy to a physical robot to achieve motion control.
 
+For **G1 human-like walking**, prioritize **`g1_upper_amp`** after preparing clips with the **Data / retargeting** section; classic **`g1` / `g1_upper`** runs serve as **baselines** without this motion prior.
+
 ## 🛠️ User Guide
 
 ### 1. Training
@@ -45,7 +100,7 @@ python legged_gym/scripts/train.py --task=xxx
 ```
 
 #### ⚙️ Parameter Description
-- `--task`: Required parameter; values include `go2`, `g1`, `h1`, `h1_2`, plus G1 23DoF variants such as `g1_upper`, `g1_upper_motion_ref`, `g1_upper_amp` (see subsection below).
+- `--task`: Required parameter; values include `go2`, `g1`, `h1`, `h1_2`, plus G1 23DoF variants: **`g1_upper_amp`** (motion prior, main line here), **`g1_upper`** (baseline PPO staging), **`g1_upper_motion_ref`** (dense reference shaping; legacy / not recommended—see Motion retargeting section for data sources).
 
 - `--headless`: Defaults to starting with a graphical interface; set to true for headless mode (higher efficiency).
 - `--resume`: Resume training from a checkpoint in the logs.
@@ -71,9 +126,9 @@ python legged_gym/scripts/train.py --task=xxx
 
 **Default Training Result Directory**: `logs/<experiment_name>/<date_time>_<run_name>/model_<iteration>.pt`
 
-#### G1: motion reference imitation (optional)
+#### G1: motion reference imitation (legacy; not recommended)
 
-This repo includes an optional task **`g1_upper_motion_ref`**: full-body PPO on the 23-DoF G1 with a **reference motion shaping** reward using mink-retargeted walking clips (pickle files from your pipeline, e.g. `*_poses.pkl`). It does not replace `g1_upper`; it uses experiment name `g1_upper_motion_ref` and logs under `logs/g1_upper_motion_ref/`.
+Optional task **`g1_upper_motion_ref`**: dense **per-step** joint reference shaping toward mink pickles. **We did not get satisfactory results with this trajectory** compared to **`g1_upper_amp`**; the task remains in-tree for reproducibility only. Logs: **`logs/g1_upper_motion_ref/`**.
 
 **Train** (from the repository root):
 
@@ -87,9 +142,9 @@ You can also set `NUM_ENVS`, `MAX_ITERATIONS`, `RUN_NAME`, or call `train.py` wi
 
 **Tune** (see `legged_gym/envs/g1/g1_config.py`, class `G1UpperBodyMotionRefCfg`): `motion_ref_dof` scale, `motion_ref.err_reduce` (`mean` vs `sum`), `command_gate`, **`motion_ref.sigma` / `sigma_min` (L² norm scale in rad for joint error vector, curriculum updates `σ ← max(σ_min, min(mean ‖q−q_ref‖₂, σ))`)**, `curriculum_norm_ema_alpha`, etc.
 
-#### G1: AMP-style motion prior (optional)
+#### G1: AMP-style motion prior (**main imitation path**)
 
-Task **`g1_upper_amp`** uses an **AMP-style discriminator** instead of dense per-step tracking of reference joint angles (**`motion_ref_dof` scale is 0** on this task): the discriminator classifies stacked **multi-frame joint features** (scaled relative `dof_pos` and `dof_vel`) from simulator rollouts vs expert trajectories sampled from the same mink pickles. Rewards add **λ_amp · (−log(clamp(1 − σ(D(x)), eps)))**; **λ_amp** is scheduled by default (see below). Discriminator training uses **binary cross-entropy with label smoothing**. When **λ_amp** is at or below **`min_scale_for_amp_disc`** (default 0), **no discriminator forward pass or update** runs for that iteration (pure PPO walking phase).
+Task **`g1_upper_amp`** is the **preferred** setup here: **AMP-style discriminator** (no dense **`motion_ref_dof`** tracking reward). Experts are walking clips produced by either retarget fork above (**`Motion retargeting`** section).
 
 - Experiment folder: **`logs/g1_upper_amp/`**
 - Train script (repo root):
@@ -151,14 +206,6 @@ With the default **`EXPORT_POLICY = True`** flag in `legged_gym/scripts/play.py`
 - Standard networks (MLP) are exported as `policy_1.pt`.
 - RNN networks are exported as `policy_lstm_1.pt`.
 
-### Play Results
-
-| Go2 | G1 | H1 | H1_2 |
-|--- | --- | --- | --- |
-| [![go2](https://oss-global-cdn.unitree.com/static/ba006789e0af4fe3867255f507032cd7.GIF)](https://oss-global-cdn.unitree.com/static/d2e8da875473457c8d5d69c3de58b24d.mp4) | [![g1](https://oss-global-cdn.unitree.com/static/32f06dc9dfe4452dac300dda45e86b34.GIF)](https://oss-global-cdn.unitree.com/static/5bbc5ab1d551407080ca9d58d7bec1c8.mp4) | [![h1](https://oss-global-cdn.unitree.com/static/fa04e73966934efa9838e9c389f48fa2.GIF)](https://oss-global-cdn.unitree.com/static/522128f4640c4f348296d2761a33bf98.mp4) |[![h1_2](https://oss-global-cdn.unitree.com/static/83ed59ca0dab4a51906aff1f93428650.GIF)](https://oss-global-cdn.unitree.com/static/15fa46984f2343cb83342fd39f5ab7b2.mp4)|
-
----
-
 ### 3. Sim2Sim (Mujoco)
 
 Run Sim2Sim in the Mujoco simulator:
@@ -193,15 +240,6 @@ Options: **`--camera-follow-side`** `none`|`right`|`left`, **`--camera-follow-di
 
 The default model is located at `deploy/pre_train/{robot}/motion.pt`; custom-trained models are saved in `logs/g1/exported/policies/policy_lstm_1.pt`. Update the `policy_path` in the YAML configuration file accordingly.
 
-#### Simulation Results
-
-| G1 | H1 | H1_2 |
-|--- | --- | --- |
-| [![mujoco_g1](https://oss-global-cdn.unitree.com/static/244cd5c4f823495fbfb67ef08f56aa33.GIF)](https://oss-global-cdn.unitree.com/static/5aa48535ffd641e2932c0ba45c8e7854.mp4)  |  [![mujoco_h1](https://oss-global-cdn.unitree.com/static/7ab4e8392e794e01b975efa205ef491e.GIF)](https://oss-global-cdn.unitree.com/static/8934052becd84d08bc8c18c95849cf32.mp4)  |  [![mujoco_h1_2](https://oss-global-cdn.unitree.com/static/2905e2fe9b3340159d749d5e0bc95cc4.GIF)](https://oss-global-cdn.unitree.com/static/ee7ee85bd6d249989a905c55c7a9d305.mp4) |
-
-
----
-
 ### 4. Sim2Real (Physical Deployment)
 
 Before deploying to the physical robot, ensure it’s in debug mode. Detailed steps can be found in the [Physical Deployment Guide](deploy/deploy_real/README.md):
@@ -214,14 +252,6 @@ python deploy/deploy_real/deploy_real.py {net_interface} {config_name}
 #### Parameter Description
 - `net_interface`: Network card name connected to the robot, e.g., `enp3s0`.
 - `config_name`: Configuration file located in `deploy/deploy_real/configs/`, e.g., `g1.yaml`, `h1.yaml`, `h1_2.yaml`.
-
-#### Deployment Results
-
-| G1 | H1 | H1_2 |
-|--- | --- | --- |
-| [![real_g1](https://oss-global-cdn.unitree.com/static/78c61459d3ab41448cfdb31f6a537e8b.GIF)](https://oss-global-cdn.unitree.com/static/0818dcf7a6874b92997354d628adcacd.mp4) | [![real_h1](https://oss-global-cdn.unitree.com/static/fa07b2fd2ad64bb08e6b624d39336245.GIF)](https://oss-global-cdn.unitree.com/static/ea0084038d384e3eaa73b961f33e6210.mp4) | [![real_h1_2](https://oss-global-cdn.unitree.com/static/a88915e3523546128a79520aa3e20979.GIF)](https://oss-global-cdn.unitree.com/static/12d041a7906e489fae79d55b091a63dd.mp4) |
-
----
 
 #### Deploy with C++
 There is also an example of deploying the G1 pre-trained model in C++. the C++ code is located in the following directory.
@@ -265,6 +295,9 @@ Replace `{net_interface}` with your actual network interface name (e.g., eth0, w
 This repository is built upon the support and contributions of the following open-source projects. Special thanks to:
 
 - [legged\_gym](https://github.com/leggedrobotics/legged_gym): The foundation for training and running codes.
+- [PBHC](https://github.com/TeleHuman/PBHC) / [AMASS-POST-PROCESS fork](https://github.com/SLDRMK/AMASS-POST-PROCESS): Mink SMPL→robot retargeting pipeline used to build motion data.
+- [GMR](https://github.com/YanjieZe/GMR) / [SLDRMK fork](https://github.com/SLDRMK/GMR): Alternative SMPL-X batch retargeting with compatible walking filters.
+- [AMASS](https://amass.is.tue.mpg.de/): Human motion corpus (BMLrub / CMU / KIT subsets used here).
 - [rsl\_rl](https://github.com/leggedrobotics/rsl_rl.git): Reinforcement learning algorithm implementation.
 - [mujoco](https://github.com/google-deepmind/mujoco.git): Providing powerful simulation functionalities.
 - [unitree\_sdk2\_python](https://github.com/unitreerobotics/unitree_sdk2_python.git): Hardware communication interface for physical deployment.

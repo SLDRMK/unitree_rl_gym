@@ -161,5 +161,5 @@ cython_debug/
 # logs
 logs
 
-# pics / videos
-pics/
+# # pics / videos
+# pics/
