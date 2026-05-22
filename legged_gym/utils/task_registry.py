@@ -10,7 +10,7 @@ from rsl_rl.runners import OnPolicyRunner
 from legged_gym.runners.on_policy_runner_amp import OnPolicyRunnerAMP
 
 from legged_gym import LEGGED_GYM_ROOT_DIR, LEGGED_GYM_ENVS_DIR
-from .helpers import get_args, update_cfg_from_args, class_to_dict, get_load_path, set_seed, parse_sim_params
+from .helpers import get_args, update_cfg_from_args, class_to_dict, get_load_path, set_seed, parse_sim_params, extract_iteration_from_checkpoint_path
 from legged_gym.envs.base.legged_robot_config import LeggedRobotCfg, LeggedRobotCfgPPO
 
 class TaskRegistry():
@@ -107,14 +107,51 @@ class TaskRegistry():
         # override cfg from args (if specified)
         _, train_cfg = update_cfg_from_args(None, train_cfg, args)
 
-        if log_root=="default":
-            log_root = os.path.join(LEGGED_GYM_ROOT_DIR, 'logs', train_cfg.runner.experiment_name)
-            log_dir = os.path.join(log_root, datetime.now().strftime('%b%d_%H-%M-%S') + '_' + train_cfg.runner.run_name)
+        if log_root == "default":
+            experiment_log_root = os.path.join(LEGGED_GYM_ROOT_DIR, 'logs', train_cfg.runner.experiment_name)
+        elif log_root is None:
+            experiment_log_root = None
+        else:
+            experiment_log_root = log_root
+
+        resume_enabled = bool(getattr(train_cfg.runner, "resume", False))
+        resume_path = None
+        if resume_enabled:
+            if experiment_log_root is None:
+                raise ValueError(
+                    "runner.resume is True but log_root is None; cannot locate checkpoints."
+                )
+            resume_path = get_load_path(
+                experiment_log_root, train_cfg.runner.load_run, train_cfg.runner.checkpoint
+            )
+            it_from_name = extract_iteration_from_checkpoint_path(resume_path)
+            print(f"[resume] Checkpoint file: {resume_path}")
+            if it_from_name is not None:
+                print(f"[resume] Iteration from filename (for reference): {it_from_name}")
+
+        continue_same_logdir = bool(getattr(train_cfg.runner, "resume_continue_logdir", True))
+
+        if log_root == "default":
+            if resume_path is not None and continue_same_logdir:
+                log_dir = os.path.dirname(os.path.abspath(resume_path))
+                print(f"[resume] Continuing in existing run dir: {log_dir}")
+            else:
+                log_dir = os.path.join(
+                    experiment_log_root,
+                    datetime.now().strftime('%b%d_%H-%M-%S') + '_' + train_cfg.runner.run_name,
+                )
         elif log_root is None:
             log_dir = None
         else:
-            log_dir = os.path.join(log_root, datetime.now().strftime('%b%d_%H-%M-%S') + '_' + train_cfg.runner.run_name)
-        
+            if resume_path is not None and continue_same_logdir:
+                log_dir = os.path.dirname(os.path.abspath(resume_path))
+                print(f"[resume] Continuing in existing run dir: {log_dir}")
+            else:
+                log_dir = os.path.join(
+                    log_root,
+                    datetime.now().strftime('%b%d_%H-%M-%S') + '_' + train_cfg.runner.run_name,
+                )
+
         train_cfg_dict = class_to_dict(train_cfg)
         algo_runner_class = getattr(train_cfg.runner, "algo_runner_class", "OnPolicyRunner")
         runners = {
@@ -126,13 +163,15 @@ class TaskRegistry():
                 f"Unknown algo_runner_class {algo_runner_class!r}; supported: {list(runners.keys())}"
             )
         runner = runners[algo_runner_class](env, train_cfg_dict, log_dir, device=args.rl_device)
-        #save resume path before creating a new log_dir
-        resume = train_cfg.runner.resume
-        if resume:
-            # load previously trained model
-            resume_path = get_load_path(log_root, load_run=train_cfg.runner.load_run, checkpoint=train_cfg.runner.checkpoint)
-            print(f"Loading model from: {resume_path}")
+
+        if resume_path is not None:
             runner.load(resume_path)
+            cur_it = getattr(runner, "current_learning_iteration", None)
+            if cur_it is not None:
+                print(
+                    f"[resume] Restored current_learning_iteration={int(cur_it)} "
+                    f"(scheduler / curriculum use this counter)."
+                )
         return runner, train_cfg
 
 # make global task registry

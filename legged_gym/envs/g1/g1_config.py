@@ -307,14 +307,25 @@ class G1UpperBodyAmpCfg(G1UpperBodyMotionRefCfg):
     motion_ref 仍用于加载专家 clip；motion_ref_dof=0（不启用关节参考追踪奖励）。
     """
 
+    class commands(G1UpperBodyMotionRefCfg.commands):
+        class ranges(G1UpperBodyMotionRefCfg.commands.ranges):
+            def mul(xs, ratio):
+                return [x * ratio for x in xs]
+            lin_vel_x = [0.0, 1.0]
+            lin_vel_y = mul(G1UpperBodyMotionRefCfg.commands.ranges.lin_vel_y, 0.1)
+            ang_vel_yaw = mul(G1UpperBodyMotionRefCfg.commands.ranges.ang_vel_yaw, 0.1)
+            heading = mul(G1UpperBodyMotionRefCfg.commands.ranges.heading, 0.1)
+
     class rewards(G1UpperBodyMotionRefCfg.rewards):
         class scales(G1UpperBodyMotionRefCfg.rewards.scales):
             motion_ref_dof = 0.0
 
     class amp:
         enabled = True
-        # 判别器看的「扩张」帧数：沿时间串联 (q−q₀)·s_q 与 q̇·s_v
-        history_frames = 4
+        # 判别器输入：在 history_window_s 秒内均匀取 history_frames 帧（拼接相对 q₀ 的 dof 与 dof_vel）。
+        # 默认 0.9s / 10 帧 → 相邻帧间隔 0.1s（仿真环形缓冲与专家轨迹一致）。
+        history_frames = 10
+        history_window_s = 0.9
         # hidden_dims = [512, 256]
         hidden_dims = [128, 128]
         activation = 'elu'
@@ -343,13 +354,20 @@ class G1UpperBodyAmpCfg(G1UpperBodyMotionRefCfg):
         # True：在里程碑之间对 λ_amp 线性插值；False：阶梯常数（每个 milestone 生效到下一里程碑）
         curriculum_interp_between_milestones = False
         # (learning_iteration ≥ 阈值, λ_amp)；参考：Phase0 纯 PPO；Phase1 小 AMP 0.02~0.05；Phase2 抬到 0.1→0.2；终值常用 0.1~0.3
-        # 以下默认值按 runner.max_iterations=10000；短训请按比例前移 milestone。
+        # 以下默认值按 G1UpperBodyAmpCfgPPO.runner.max_iterations=15000：最后一档 λ=0.25 自迭代 ≥8500 持续到训练结束（较长末段）。
+        # reward_scale_schedule_iters = (
+        #     (0, 0.0),
+        #     (2000, 0.035),
+        #     (5000, 0.10),
+        #     (7000, 0.20),
+        #     (8500, 0.25),
+        # )
         reward_scale_schedule_iters = (
             (0, 0.0),
             (2000, 0.035),
-            (5000, 0.10),
-            (7000, 0.20),
-            (8500, 0.25),
+            (6000, 0.07),
+            (12000, 0.1),
+            (18000, 0.15),
         )
         # curriculum_enabled=False 时作为固定 λ_amp
         reward_scale = 0.25
@@ -361,6 +379,7 @@ class G1UpperBodyAmpCfgPPO(G1UpperBodyMotionRefCfgPPO):
     class runner(G1UpperBodyMotionRefCfgPPO.runner):
         experiment_name = 'g1_upper_amp'
         algo_runner_class = 'OnPolicyRunnerAMP'
+        max_iterations = 25000
 
     class amp(G1UpperBodyAmpCfg.amp):
         """训练侧与 env 对齐的 AMP 超参字典（class_to_dict 展开）"""

@@ -1,6 +1,15 @@
-"""Load mink retarget pickles (convert_fit_motion.py) and map DOF rows to Isaac G1 order.
+"""Load reference-motion pickles for G1 AMP / motion_ref.
 
-Storage layout follows AMASS pipeline after ``count_pose_aa`` concat:
+Supports:
+
+1. **Mink** pickles from ``convert_fit_motion.py``: top-level dict mapping clip id → payload
+   with ``dof`` shaped ``[T, 23]`` in mink *storage* layout (see below).
+
+2. **GMR** pickles from ``GMR/scripts/smplx_to_robot_dataset.py`` (``unitree_g1``): flat dict with
+   ``dof_pos`` shaped ``[T, 29]`` (MuJoCo ``qpos[7:]`` for ``g1_mocap_29dof.xml``). Rows are
+   reindexed to Isaac ``g1_23dof`` order (drops waist_roll / waist_pitch / wrist pitch–yaw).
+
+Mink storage layout follows AMASS pipeline after ``count_pose_aa`` concat:
 first 19 rows of mink dof_pos [:19] plus [22:26] (see ``convert_fit_motion.py``):
 
 - 0-11  legs (left then right), same naming as Isaac
@@ -11,6 +20,10 @@ first 19 rows of mink dof_pos [:19] plus [22:26] (see ``convert_fit_motion.py``)
 
 Isaac ``g1_23dof`` order (URDF actuator tree): legs, waist_yaw, left arm ×5,
 right arm ×5. Wrist_roll columns have no pickle source; callers fill from default pose.
+
+GMR MuJoCo slice → Isaac 23 uses actuator/joint order from ``g1_mocap_29dof.xml``: indices
+``0:12`` legs, ``12`` waist_yaw, ``15:20`` left arm through wrist_roll, ``22:27`` right arm
+through wrist_roll (skip ``13:14`` waist roll/pitch and ``21,28`` wrist pitch/yaw columns).
 """
 
 from __future__ import annotations
@@ -18,13 +31,50 @@ from __future__ import annotations
 import glob
 import os
 import pickle
+import sys
+from types import ModuleType
 from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
 import torch
 
 
-# Isaac dof index -> storage column (-1 use default posture for that dof)
+def _ensure_numpy2_pickle_compat() -> None:
+    """Unpickle arrays saved with NumPy 2.x when this env runs NumPy 1.x (e.g. Python 3.8).
+
+    Such pickles import ``numpy._core.multiarray`` / ``numpy._core.umath``, which only exist on NumPy 2+.
+    Map them to ``numpy.core`` equivalents before ``pickle.load``.
+    """
+    if hasattr(np, "_core"):
+        return
+    import numpy.core.multiarray as multiarray
+    import numpy.core.umath as umath
+
+    core = ModuleType("numpy._core")
+    core.multiarray = multiarray
+    core.umath = umath
+    sys.modules.setdefault("numpy._core", core)
+    sys.modules.setdefault("numpy._core.multiarray", multiarray)
+    sys.modules.setdefault("numpy._core.umath", umath)
+
+
+# Mink: Isaac dof index -> storage column (-1 use default posture for that dof).
+# GMR: dof_pos columns (MuJoCo qpos after freejoint, g1 29 DoF) picked into Isaac g1_23dof order.
+_GMR_MUJOCO_TO_ISAAC23_COLS: Tuple[int, ...] = (
+    *range(12),
+    12,
+    15,
+    16,
+    17,
+    18,
+    19,
+    22,
+    23,
+    24,
+    25,
+    26,
+)
+
 _G1_STORAGE_MAP: Tuple[int, ...] = (
     0,
     1,
@@ -83,34 +133,91 @@ def _interp_clip(dof: np.ndarray, fps: float, dt_policy: float) -> np.ndarray:
 
 
 def load_mink_motion_dict(blob: dict) -> dict:
+    """Return ``dof`` ``[T,23]`` in Isaac order, ``fps`` scalar float, ``dof_layout`` for downstream."""
+
+    if isinstance(blob, dict) and "dof_pos" in blob:
+        dof_raw = np.asarray(blob["dof_pos"], dtype=np.float32)
+        if dof_raw.ndim != 2:
+            raise ValueError(f"GMR dof_pos must be 2D, got {dof_raw.shape}")
+        fps_raw = blob.get("fps", 30)
+        fps_f = float(np.asarray(fps_raw).reshape(-1)[0])
+        last = dof_raw.shape[-1]
+        if last == 29:
+            cols = np.asarray(_GMR_MUJOCO_TO_ISAAC23_COLS, dtype=np.int64)
+            dof = dof_raw[:, cols]
+        elif last == 23:
+            dof = dof_raw
+        else:
+            raise ValueError(
+                f"GMR dof_pos expected [T,29] or [T,23] for G1, got {dof_raw.shape}; "
+                "check robot xml / retargeting pipeline."
+            )
+        if dof.shape[-1] != 23:
+            raise ValueError(f"internal: expected [T,23] after GMR slice, got {dof.shape}")
+        return {"dof": dof, "fps": fps_f, "dof_layout": "isaac"}
+
+    if not isinstance(blob, dict) or not blob:
+        raise ValueError("motion pickle must be a non-empty dict")
+
     payload = blob[next(iter(blob.keys()))]
+    if not isinstance(payload, dict) or "dof" not in payload:
+        raise ValueError(
+            "expected mink motion dict {clip_id: {dof, fps}} or GMR dict with dof_pos; "
+            f"got keys {list(blob.keys())[:5]}..."
+        )
     dof = np.asarray(payload["dof"], dtype=np.float32)
     fps = payload.get("fps", 30)
     if dof.ndim != 2 or dof.shape[-1] != 23:
-        raise ValueError(f" dof must be [T,23], got {dof.shape}")
-    return {"dof": dof, "fps": float(np.asarray(fps).reshape(-1)[0])}
+        raise ValueError(f"mink dof must be [T,23], got {dof.shape}")
+    return {"dof": dof, "fps": float(np.asarray(fps).reshape(-1)[0]), "dof_layout": "mink_storage"}
 
 
 def gather_mink_pkl_paths(data_dir: str, pattern: str = "*.pkl") -> List[str]:
-    paths = sorted(glob.glob(os.path.join(os.path.expanduser(data_dir), pattern)))
+    base = os.path.abspath(os.path.expanduser(data_dir))
+    if "**" in pattern:
+        glob_pat = os.path.join(base, pattern)
+        recursive = True
+    else:
+        glob_pat = os.path.join(base, "**", pattern)
+        recursive = True
+    paths = sorted(glob.glob(glob_pat, recursive=recursive))
     if not paths:
-        raise FileNotFoundError(f"no pickle files matched {pattern!r} under {data_dir!r}")
+        raise FileNotFoundError(
+            f"no pickle files matched pattern {pattern!r} (recursive) under {data_dir!r}"
+        )
     return paths
 
 
 class MinkReferenceMotionBank:
-    """Pre-resampled looping clips [T, num_dof] at policy dt, on CPU or device."""
+    """Pre-resampled looping clips [T, num_dof] at policy dt, on CPU or device.
+
+    Internally stores a padded tensor ``[num_clips, T_max, dof]`` so AMP expert sampling can batch-gather
+    without a Python loop over distinct clip ids (which dominated ``learn_time`` for large libraries).
+    """
 
     def __init__(
         self,
         clip_tensors: Sequence[torch.Tensor],
     ):
-        self._clips = [c.contiguous() for c in clip_tensors]
-        lengths = [c.shape[0] for c in self._clips]
-        if min(lengths) < 2:
+        if not clip_tensors:
+            raise ValueError("motion bank requires at least one clip tensor")
+        clips = [c.contiguous().float() for c in clip_tensors]
+        lengths_li = [int(c.shape[0]) for c in clips]
+        if min(lengths_li) < 2:
             raise ValueError("each motion clip needs at least 2 resampled frames for interpolation")
 
-        self.num_clips = len(self._clips)
+        self.num_clips = len(clips)
+        dof = int(clips[0].shape[1])
+        if any(int(c.shape[1]) != dof for c in clips):
+            raise ValueError("all clips must share the same dof dimension")
+        t_max = max(lengths_li)
+        ref_dev = clips[0].device
+        pad = torch.zeros(self.num_clips, t_max, dof, dtype=torch.float32, device=ref_dev)
+        for i, c in enumerate(clips):
+            ti = c.shape[0]
+            pad[i, :ti] = c
+        self._clips_pad = pad
+        self._lengths = torch.tensor(lengths_li, dtype=torch.float32, device=ref_dev)
         self.policy_dt_ref = float("nan")  # optional debug
 
     def sample_clip_indices(self, n: int, device) -> torch.Tensor:
@@ -119,12 +226,8 @@ class MinkReferenceMotionBank:
 
     def sample_phase_times(self, clip_ids: torch.Tensor, device) -> torch.Tensor:
         """Uniform start phase in [0, duration) for selected clips."""
-        dur = torch.tensor(
-            [self._clips[i].shape[0] for i in clip_ids.cpu().tolist()],
-            device=device,
-            dtype=torch.float32,
-        )
-        dur_seconds = dur * self.policy_dt_ref
+        lens = self._lengths.to(device=device)[clip_ids.long()]
+        dur_seconds = lens * self.policy_dt_ref
         frac = torch.rand_like(dur_seconds)
         return frac * dur_seconds.clamp(min=self.policy_dt_ref)
 
@@ -132,41 +235,36 @@ class MinkReferenceMotionBank:
         times += dt
 
     def gather_dof_pos(self, clip_ids: torch.Tensor, times: torch.Tensor, default_pose: torch.Tensor) -> torch.Tensor:
-        """clip_ids [N], times [N] seconds since clip start — linear wrap indices."""
-        N = clip_ids.shape[0]
-        out = default_pose.unsqueeze(0).expand(N, -1).clone()
-
-        uniq = clip_ids.unique().tolist()
-        for cid in uniq:
-            mask = clip_ids == cid
-            clip = self._clips[cid].to(device=times.device, dtype=out.dtype)
-            T = clip.shape[0]
-            phase = times[mask] / self.policy_dt_ref
-            i0 = torch.floor(phase).long() % T
-            i1 = (i0 + 1) % T
-            w = (phase - torch.floor(phase)).unsqueeze(1)
-            ref_local = (1.0 - w) * clip[i0] + w * clip[i1]
-            out[mask] = ref_local
-
-        return out
+        """clip_ids [N], times [N] seconds since clip start — linear wrap indices (vectorized)."""
+        device = times.device
+        dtype = default_pose.dtype
+        ids = clip_ids.long()
+        lens = self._lengths.to(device=device, dtype=torch.long)[ids].clamp(min=2)
+        pad = self._clips_pad.to(device=device, dtype=dtype)
+        dt = self.policy_dt_ref
+        phase = times / dt
+        flo = torch.floor(phase)
+        i0 = flo.long().remainder(lens)
+        i1 = (i0 + 1).remainder(lens)
+        w = (phase - flo).unsqueeze(-1)
+        c0 = pad[ids, i0]
+        c1 = pad[ids, i1]
+        return (1.0 - w) * c0 + w * c1
 
     def gather_dof_vel(self, clip_ids: torch.Tensor, times: torch.Tensor, default_pose: torch.Tensor) -> torch.Tensor:
-        """Time-derivative of linearly interpolated joint angles along looping clips."""
-        del default_pose  # symmetry with gather_dof_pos; velocities do not mix in default joints
-        N = clip_ids.shape[0]
-        out = torch.zeros(N, self._clips[0].shape[1], dtype=times.dtype, device=times.device)
-        uniq = clip_ids.unique().tolist()
-        for cid in uniq:
-            mask = clip_ids == cid
-            clip = self._clips[cid].to(device=times.device, dtype=out.dtype)
-            T = clip.shape[0]
-            dt = self.policy_dt_ref
-            phase = times[mask] / dt
-            i0 = torch.floor(phase).long() % T
-            i1 = (i0 + 1) % T
-            dq = clip[i1] - clip[i0]
-            out[mask] = dq / dt
-        return out
+        """Time-derivative of linearly interpolated joint angles along looping clips (vectorized)."""
+        device = times.device
+        dtype = default_pose.dtype
+        ids = clip_ids.long()
+        lens = self._lengths.to(device=device, dtype=torch.long)[ids].clamp(min=2)
+        pad = self._clips_pad.to(device=device, dtype=dtype)
+        dt = self.policy_dt_ref
+        phase = times / dt
+        flo = torch.floor(phase)
+        i0 = flo.long().remainder(lens)
+        i1 = (i0 + 1).remainder(lens)
+        dq = pad[ids, i1] - pad[ids, i0]
+        return dq / dt
 
     def gather_amp_dof_features(
         self,
@@ -176,10 +274,16 @@ class MinkReferenceMotionBank:
         default_dof_row: torch.Tensor,
         scale_dof_pos: float,
         scale_dof_vel: float,
+        *,
+        history_window_s: Optional[float] = None,
     ) -> torch.Tensor:
-        """Stack discriminator-style joint features along `history_len` past steps (oldest → newest).
+        """Stack discriminator-style joint features along `history_len` samples (oldest → newest).
 
-        Each frame is [ (q − q_default)·s_pos ; q_dot·s_vel ] flattened; output [N, history_len · 46] for G1 (23 dof).
+        Each sample is [ (q − q_default)·s_pos ; q_dot·s_vel ]; output [N, history_len · 2·dof].
+
+        Temporal layout:
+        - If ``history_window_s`` is None: consecutive policy steps spaced by ``policy_dt_ref``.
+        - Else: uniformly spaced times covering ``[center - history_window_s, center]`` (inclusive endpoints).
         """
         if history_len < 1:
             raise ValueError("history_len must be >= 1")
@@ -188,12 +292,20 @@ class MinkReferenceMotionBank:
         dtype = default_dof_row.dtype
         default_dof_row = default_dof_row.to(device=device, dtype=dtype)
         N = clip_ids.shape[0]
-        frame_counts = torch.tensor([float(c.shape[0]) for c in self._clips], device=device, dtype=dtype)
-        durations = frame_counts[clip_ids] * dt
+        frame_counts = self._lengths.to(device=device, dtype=dtype)[clip_ids.long()]
+        durations = frame_counts * dt
         durations = durations.clamp(min=dt * 2.0)
 
-        offs = dt * torch.arange(history_len - 1, -1, -1, device=device, dtype=dtype).view(1, -1)
-        t_mat = torch.remainder(center_times.unsqueeze(1) - offs, durations.unsqueeze(1))
+        if history_len == 1:
+            offs_sec = torch.zeros(1, device=device, dtype=dtype)
+        elif history_window_s is not None and float(history_window_s) > 0:
+            ws = float(history_window_s)
+            denom = float(max(history_len - 1, 1))
+            offs_sec = ws * torch.arange(history_len - 1, -1, -1, device=device, dtype=dtype) / denom
+        else:
+            offs_sec = dt * torch.arange(history_len - 1, -1, -1, device=device, dtype=dtype)
+
+        t_mat = torch.remainder(center_times.unsqueeze(1) - offs_sec.view(1, -1), durations.unsqueeze(1))
 
         dof_dim = default_dof_row.shape[-1]
         frames = torch.zeros(N, history_len, dof_dim * 2, device=device, dtype=dtype)
@@ -216,6 +328,13 @@ def build_mink_motion_bank(
     clip_limit: Optional[int] = None,
     device=None,
 ):
+    """Load clips as tensors on ``device`` when set (e.g. env GPU).
+
+    Keeping clips on GPU avoids per-forward CPU→GPU copies in ``gather_dof_pos`` / ``gather_dof_vel``,
+    which becomes costly when many distinct clips appear in one AMP minibatch (likely when the motion
+    library is large).
+    """
+    _ensure_numpy2_pickle_compat()
     paths = gather_mink_pkl_paths(data_dir, glob_pattern)
     if clip_limit is not None:
         paths = paths[:clip_limit]
@@ -227,14 +346,18 @@ def build_mink_motion_bank(
         item = load_mink_motion_dict(blob)
         dof_s = item["dof"]
         fps = item["fps"]
-        isaac_dof = mink_dof_row_to_isaac(dof_s, default_pose_isaac)
+        if item.get("dof_layout", "mink_storage") == "isaac":
+            isaac_dof = dof_s
+        else:
+            isaac_dof = mink_dof_row_to_isaac(dof_s, default_pose_isaac)
         dof_rs = _interp_clip(isaac_dof, fps, policy_dt)
         clips.append(torch.tensor(dof_rs, dtype=torch.float32, device=device))
 
     bank = MinkReferenceMotionBank(clips)
     bank.policy_dt_ref = policy_dt
+    _, t_pad, d_pad = bank._clips_pad.shape
     print(
         f"[MinkReferenceMotionBank] Loaded {len(clips)} clips from {data_dir!r} "
-        f"resampled @ policy_dt={policy_dt:.5f}s"
+        f"resampled @ policy_dt={policy_dt:.5f}s (padded T_max={t_pad}, dof={d_pad})"
     )
     return bank

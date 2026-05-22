@@ -210,7 +210,11 @@ class LeggedRobotCfgPPO(BaseConfig):
         experiment_name = 'test'
         run_name = ''
         # load and resume
+        # resume must be True (CLI --resume, or resume=True below) OR pass --checkpoint / --load_run on CLI for load.
         resume = False
         load_run = -1 # -1 = last run
         checkpoint = -1 # -1 = last saved model
         resume_path = None # updated from load_run and chkpt
+        # If True while resuming, reuse checkpoint's log dir for TB/saves. If False (default fork), NEW timestamp
+        # subfolder is created; iter still restores from ckpt whenever resume/load runs — not gated by this flag.
+        resume_continue_logdir = False

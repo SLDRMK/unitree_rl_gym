@@ -59,6 +59,14 @@ python legged_gym/scripts/train.py --task=xxx
 - `--rl_device`: 强化学习计算设备，指定 CPU 为 `--rl_device=cpu`
 - `--training_stage`: G1 23DoF 分阶段训练模式，可选 `upper_body` 或 `joint_finetune`
 - `--lower_body_checkpoint`: `upper_body` 阶段使用的 12DoF 下半身训练 checkpoint，例如 `logs/g1/xxx/model_10000.pt`
+- `--resume_fork`：**读 checkpoint** 时仍恢复迭代计数，但 TensorBoard/保存写入**新的时间戳 run 子目录**（不写回 checkpoint 原目录）；与配置里单次将 `runner.resume_continue_logdir` 设为 `False` 的效果一致。
+- `--train_to_iteration`: 训练到**全局迭代步**（本轮剩余迭代数约为 `目标值 − checkpoint 恢复的 iter`，会覆盖仅用 `--max_iterations` 相加的语义）。
+
+**续跑与日志目录**
+
+- **`--resume`**：加载权重并恢复 **`current_learning_iteration`**（用于 \(\lambda_{\mathrm{amp}}\) 等课程）。  
+- 命令行若指定 **`--checkpoint`** 或 **`--load_run`**，也会**自动启用与 resume 相同的加载逻辑**。  
+- 配置项 **`resume_continue_logdir`**（见 `legged_robot_config.py` 里 `runner`）**只决定**沿用 checkpoint 目录还是新建目录，**不负责**「是否加载模型」。
 
 **默认保存训练结果**：`logs/<experiment_name>/<date_time>_<run_name>/model_<iteration>.pt`
 
@@ -131,7 +139,7 @@ bash legged_gym/scripts/train_g1_upper_amp.sh
 
 等价调用：`python legged_gym/scripts/train.py --task=g1_upper_amp --training_stage=joint_finetune ...`。同样需要 **`MOTION_REF_DATA_DIR`**（或配置里写明 `motion_ref.data_dir`）以加载 mink clip。
 
-超参见 `legged_gym/envs/g1/g1_config.py` 中的 **`G1UpperBodyAmpCfg`** 及其嵌套 **`amp`**：**`curriculum_enabled`**、**`reward_scale_schedule_iters`**（`(迭代阈值, λ_amp)` 列表，默认约 10k 迭代下：先纯 PPO，再小幅 AMP，再逐级抬升到约 0.25）、**`curriculum_interp_between_milestones`**（里程碑间线性插值 λ）、**`min_scale_for_amp_disc`**，以及 `history_frames`、`hidden_dims`、`label_smoothing`、`disc_learning_rate` 等。**`motion_ref_dof` = 0，不启用关节参考追踪塑形**。
+超参见 `legged_gym/envs/g1/g1_config.py` 中的 **`G1UpperBodyAmpCfg`** 及其嵌套 **`amp`**：**`curriculum_enabled`**、**`reward_scale_schedule_iters`**（`(迭代阈值, λ_amp)` 列表，默认值以配置文件为准）、**`curriculum_interp_between_milestones`**（里程碑间 λ 线性插值）、**`min_scale_for_amp_disc`**，以及 **`history_frames`**、**`history_window_s`**（多帧判别器在时间窗内均匀取样）、**`hidden_dims`**、**`label_smoothing`**、**`disc_learning_rate`** 等。**`G1UpperBodyAmpCfgPPO.runner.max_iterations`** 默认为 **25000**（可用 `--max_iterations` 覆盖）。checkpoint 内含判别器权重与 **`iter`**（用于恢复课程）。**`motion_ref_dof` = 0，不启用关节参考追踪塑形**。
 
 ---
 
@@ -269,6 +277,19 @@ python deploy/deploy_mujoco/deploy_mujoco.py g1_upper_composite.yaml
 - `policy_path` 可以是 23DoF 策略，部署脚本会自动取上半身部分；也可以是只输出上半身动作的策略。
 - `upper_body_action_scale` 用于缩放上半身动作幅度。
 - `clip_actions` 用于部署时裁剪策略输出动作，默认配置为 `1.0`，可避免 MuJoCo 中过大的未约束动作造成瞬间失稳。
+
+#### 可视化相机（可选）
+
+被动查看器可选用 **MjCAMERA_TRACKING** 锁定在机身侧向：球坐标在给定 body 坐标系内，随机器人平移和偏航一起动。示例：
+
+```bash
+python deploy/deploy_mujoco/deploy_mujoco.py g1.yaml \
+  --camera-follow-side right \
+  --camera-follow-distance 2.8 \
+  --camera-track-body pelvis
+```
+
+参数：**`--camera-follow-side`** `none|right|left`，**`--camera-follow-distance`**，**`--camera-track-body`**（MJCF 中 `<body name=...>`，默认 `pelvis`），**`--camera-follow-elevation`**，可选 **`--camera-follow-azimuth`** 校正左右观感。
 
 #### 运行效果
 

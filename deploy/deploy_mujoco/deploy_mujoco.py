@@ -237,12 +237,62 @@ class RealtimeKeyboardController:
             return self.vel_cmd.copy()
 
 
+def _apply_tracking_side_camera(viewer, body_id: int, side: str, distance: float, elevation: float, azimuth_deg):
+    """用 mjCAMERA_TRACKING：球坐标在被跟踪 body's 坐标系内，可实现侧向锁定并随机器人平移与偏航转动。"""
+    cam = viewer.cam
+    cam.type = mujoco.mjtCamera.mjCAMERA_TRACKING
+    cam.trackbodyid = int(body_id)
+    cam.distance = float(distance)
+    cam.elevation = float(elevation)
+    cam.orthographic = False
+    # Unitree MJCF：pelvis 左腿在 body's +Y 侧 ⇒ 机器人的「右侧」大致为 body's -local Y，
+    # 观感若左右反了，可用 --camera-follow-azimuth 覆盖或改用 `--camera-follow-side left`。
+    if azimuth_deg is not None:
+        cam.azimuth = float(azimuth_deg)
+    elif side == "right":
+        cam.azimuth = -90.0
+    elif side == "left":
+        cam.azimuth = 90.0
+    else:
+        cam.azimuth = -90.0
+
+
 if __name__ == "__main__":
     # get config file name from command line
     import argparse
 
     parser = argparse.ArgumentParser()
     parser.add_argument("config_file", type=str, help="config file name in the config folder")
+    parser.add_argument(
+        "--camera-follow-side",
+        choices=("none", "right", "left"),
+        default="none",
+        help="侧向锁定相机（MuJoCo 跟踪模式）：在机器人身体坐标系固定方位角与距离并随躯干运动。默认 none（自由视角）。",
+    )
+    parser.add_argument(
+        "--camera-follow-distance",
+        type=float,
+        default=2.8,
+        help="跟踪相机与被跟踪 body's 焦距距离（MuJoCo 球坐标半径），默认 2.8。",
+    )
+    parser.add_argument(
+        "--camera-track-body",
+        type=str,
+        default="pelvis",
+        help="跟踪相机的 body 名称，默认 pelvis（G1/H1 MJCF）。",
+    )
+    parser.add_argument(
+        "--camera-follow-elevation",
+        type=float,
+        default=-12.0,
+        help="跟踪相机俯仰角（度），略俯视便于看全身，默认 -12。",
+    )
+    parser.add_argument(
+        "--camera-follow-azimuth",
+        type=float,
+        default=None,
+        help="覆盖自动方位角（度）；不设则右侧约 -90°、左侧约 +90°。",
+    )
     args = parser.parse_args()
     config_file = args.config_file
     with open(f"{LEGGED_GYM_ROOT_DIR}/deploy/deploy_mujoco/configs/{config_file}", "r") as f:
@@ -303,6 +353,28 @@ if __name__ == "__main__":
     validate_config(num_actions, policy_num_actions, default_angles, kps, kds, joint_names, m)
     qpos_indices, qvel_indices, actuator_indices, torque_limits = get_model_indices(m, joint_names)
     reset_robot_state(m, d, default_angles, qpos_indices)
+
+    follow_side = None if args.camera_follow_side == "none" else args.camera_follow_side
+    cam_track_body_id = None
+    if follow_side is not None:
+        cam_track_body_id = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, args.camera_track_body)
+        if cam_track_body_id < 0:
+            raise ValueError(
+                f"未找到 body {args.camera_track_body!r}，请改用该 MJCF 中 `<body name=...>` 的名称（常见如 pelvis、torso_link）。"
+            )
+        if args.camera_follow_azimuth is not None:
+            az_note = f"azimuth={args.camera_follow_azimuth:g}°（手动指定）"
+        elif follow_side == "right":
+            az_note = "方位角≈-90°（机体右侧近似）"
+        elif follow_side == "left":
+            az_note = "方位角≈+90°（机体左侧近似）"
+        else:
+            az_note = "方位角（默认侧向）"
+
+        print(
+            f"[相机跟踪] TRACKING(body={args.camera_track_body}), 侧={follow_side}, "
+            f"distance={args.camera_follow_distance:g}, elevation={args.camera_follow_elevation:g}, {az_note}"
+        )
 
     # load policy
     policy = load_policy(policy_path, "primary")
@@ -427,6 +499,15 @@ if __name__ == "__main__":
                     printed_policy_debug = True
 
             # Pick up changes to the physics state, apply perturbations, update options from GUI.
+            if cam_track_body_id is not None:
+                _apply_tracking_side_camera(
+                    viewer,
+                    cam_track_body_id,
+                    follow_side,
+                    args.camera_follow_distance,
+                    args.camera_follow_elevation,
+                    args.camera_follow_azimuth,
+                )
             viewer.sync()
 
             # Rudimentary time keeping, will drift relative to wall clock.

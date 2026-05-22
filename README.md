@@ -58,6 +58,16 @@ python legged_gym/scripts/train.py --task=xxx
 - `--max_iterations`: Maximum number of training iterations.
 - `--sim_device`: Simulation computation device; specify CPU as `--sim_device=cpu`.
 - `--rl_device`: Reinforcement learning computation device; specify CPU as `--rl_device=cpu`.
+- `--training_stage`: G1 23-DoF staged training (`upper_body` or `joint_finetune`; see scripts under `legged_gym/scripts/`).
+- `--lower_body_checkpoint`: For `upper_body`, path to the 12-DoF lower-body **`model_*.pt`** checkpoint (not the exported TorchScript policy).
+- `--resume_fork`: When loading a checkpoint, create a **new** timestamped run folder for TensorBoard and saves instead of staying in the checkpoint’s folder; the **iteration counter still restores from the checkpoint** (same semantics as configuring `runner.resume_continue_logdir = False` for that run).
+- `--train_to_iteration`: Train until a **global** iteration counter (computes remaining steps as `target − restored_iter`; overrides additive `--max_iterations` for this launch).
+
+**Checkpoint resume**:
+
+- Passing **`--resume`** loads weights **and restores** `current_learning_iteration` (used by curricula such as \(\lambda_{\mathrm{amp}}\)).  
+- Passing **`--checkpoint`** and/or **`--load_run`** on the CLI also **enables resume** (same loader path).
+- **`resume_continue_logdir`** in Python config (**`legged_robot_config.py`** `runner`): only selects **reuse vs new log directory**—it does **not** toggle loading.
 
 **Default Training Result Directory**: `logs/<experiment_name>/<date_time>_<run_name>/model_<iteration>.pt`
 
@@ -92,7 +102,7 @@ bash legged_gym/scripts/train_g1_upper_amp.sh
 
 Equivalent: `python legged_gym/scripts/train.py --task=g1_upper_amp --training_stage=joint_finetune ...`. Same **`MOTION_REF_DATA_DIR`** (or filled `motion_ref.data_dir`) as `g1_upper_motion_ref` so clips load.
 
-Tune **`G1UpperBodyAmpCfg` / nested `amp`** (and mirrored `train_cfg`): **`curriculum_enabled`**, **`reward_scale_schedule_iters`** (list of `(learning_iteration, λ_amp)` milestones; default follows a small-AMP → ramp → ~0.1–0.25 pattern for 10k iters), **`curriculum_interp_between_milestones`** (linear ramp between milestones), **`min_scale_for_amp_disc`**, plus `history_frames`, `hidden_dims`, `label_smoothing`, constant fallback **`reward_scale`** when curriculum is off, `disc_learning_rate`, `num_updates_per_iteration`, etc. Checkpoints **`model_*.pt` also contain discriminator weights** (`discriminator_state_dict`) for `--resume`. TensorBoard: **`AMP/lambda_amp`**, **`AMP/mean_step_amp_scaled`**.
+Tune **`G1UpperBodyAmpCfg` / nested `amp`** (and mirrored `train_cfg`): **`curriculum_enabled`**, **`reward_scale_schedule_iters`** (list of `(learning_iteration, λ_amp)` milestones; see `legged_gym/envs/g1/g1_config.py` for defaults), **`curriculum_interp_between_milestones`** (linear ramp between milestones), **`min_scale_for_amp_disc`**, **`history_frames`**, **`history_window_s`** (seconds over which uniformly spaced AMP history frames are taken), **`hidden_dims`**, **`label_smoothing`**, constant fallback **`reward_scale`** when curriculum is off, `disc_learning_rate`, `num_updates_per_iteration`, etc. **`G1UpperBodyAmpCfgPPO.runner.max_iterations`** is **25000** by default (override with `--max_iterations`). Checkpoints **`model_*.pt` also contain discriminator weights** (`discriminator_state_dict`) and the stored **`iter`** field for resumed curricula. TensorBoard: **`AMP/lambda_amp`**, **`AMP/mean_step_amp_scaled`**, **`Timing/*`** splits where applicable.
 
 ### 2. Play
 
@@ -165,6 +175,19 @@ python deploy/deploy_mujoco/deploy_mujoco.py {config_name}
 ```bash
 python deploy/deploy_mujoco/deploy_mujoco.py g1.yaml
 ```
+
+#### Camera (optional)
+
+The passive viewer can **lock a side-follow camera** in MuJoCo **tracking** mode (spherical offset in the tracked body frame, so it follows translation and yaw). Example:
+
+```bash
+python deploy/deploy_mujoco/deploy_mujoco.py g1.yaml \
+  --camera-follow-side right \
+  --camera-follow-distance 2.8 \
+  --camera-track-body pelvis
+```
+
+Options: **`--camera-follow-side`** `none`|`right`|`left`, **`--camera-follow-distance`**, **`--camera-track-body`** (MJCF `<body name=...>`, default `pelvis`), **`--camera-follow-elevation`**, optional **`--camera-follow-azimuth`** to flip/tune framing.
 
 #### ➡️ Replace Network Model
 

@@ -1,4 +1,5 @@
 import os
+import re
 import copy
 import torch
 import numpy as np
@@ -81,6 +82,13 @@ def parse_checkpoint_arg(value):
         return s
 
 
+def extract_iteration_from_checkpoint_path(path: str):
+    """If ``path`` ends with ``model_<iter>.pt``, return ``iter``; else ``None``."""
+    base = os.path.basename(path)
+    m = re.match(r"model_(\d+)\.pt$", base)
+    return int(m.group(1)) if m else None
+
+
 def get_load_path(root, load_run=-1, checkpoint=-1):
     if isinstance(checkpoint, str):
         return os.path.abspath(os.path.expanduser(checkpoint))
@@ -90,7 +98,7 @@ def get_load_path(root, load_run=-1, checkpoint=-1):
         runs.sort()
         if 'exported' in runs: runs.remove('exported')
         last_run = os.path.join(root, runs[-1])
-    except:
+    except Exception:
         raise ValueError("No runs in this directory: " + root)
     if load_run==-1:
         load_run = last_run
@@ -98,8 +106,18 @@ def get_load_path(root, load_run=-1, checkpoint=-1):
         load_run = os.path.join(root, load_run)
 
     if checkpoint==-1:
-        models = [file for file in os.listdir(load_run) if 'model' in file]
-        models.sort(key=lambda m: '{0:0>15}'.format(m))
+        models = [
+            fn for fn in os.listdir(load_run)
+            if fn.startswith("model_") and fn.endswith(".pt")
+        ]
+        if not models:
+            raise ValueError(f"No model_*.pt checkpoint found under {load_run!r}")
+
+        def _numeric_model_iter(name):
+            m = re.match(r"model_(\d+)\.pt$", name)
+            return int(m.group(1)) if m else -1
+
+        models.sort(key=_numeric_model_iter)
         model = models[-1]
     else:
         model = "model_{}.pt".format(checkpoint) 
@@ -125,6 +143,12 @@ def update_cfg_from_args(env_cfg, cfg_train, args):
             cfg_train.runner.max_iterations = args.max_iterations
         if args.resume:
             cfg_train.runner.resume = args.resume
+        # If the user pins a checkpoint or run folder on the CLI, they intend to load weights and
+        # restore iter; without this, runner.resume stays False unless set in YAML/py cfg.
+        if getattr(args, "checkpoint", None) is not None or (
+            getattr(args, "load_run", None) is not None and str(args.load_run).strip() != ""
+        ):
+            cfg_train.runner.resume = True
         if args.experiment_name is not None:
             cfg_train.runner.experiment_name = args.experiment_name
         if args.run_name is not None:
@@ -133,6 +157,8 @@ def update_cfg_from_args(env_cfg, cfg_train, args):
             cfg_train.runner.load_run = args.load_run
         if args.checkpoint is not None:
             cfg_train.runner.checkpoint = args.checkpoint
+        if getattr(args, "resume_fork", False):
+            cfg_train.runner.resume_continue_logdir = False
 
     return env_cfg, cfg_train
 
@@ -145,6 +171,10 @@ def get_args():
         {"name": "--load_run", "type": str,  "help": "Name of the run to load when resume=True. If -1: will load the last run. Overrides config file if provided."},
         {"name": "--checkpoint", "type": parse_checkpoint_arg, "default": None,
          "help": "Checkpoint: iteration number (e.g. 10000 -> model_10000.pt) or path to a .pt file. If omitted with resume: last checkpoint in run."},
+        {"name": "--resume_fork", "action": "store_true", "default": False,
+         "help": "When resuming: create a NEW timestamped log subdir instead of continuing in the checkpoint's run folder (TensorBoard forks)."},
+        {"name": "--train_to_iteration", "type": int, "default": None,
+         "help": "Global iteration to stop at (requires --resume semantics). Compute remaining iters as this minus restored iter (overrides additive --max_iterations for this run only)."},
         
         {"name": "--headless", "action": "store_true", "default": False, "help": "Force display off at all times"},
         {"name": "--horovod", "action": "store_true", "default": False, "help": "Use horovod for multi-gpu training"},

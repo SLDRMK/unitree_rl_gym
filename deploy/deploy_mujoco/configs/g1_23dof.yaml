@@ -1,5 +1,10 @@
 # policy_path: "{LEGGED_GYM_ROOT_DIR}/logs/g1_upper/May02_11-49-23_fullbody_isaaclab_randomized/policy_1.pt"
-policy_path: "{LEGGED_GYM_ROOT_DIR}/logs/g1_upper/May03_06-45-48_fullbody_isaaclab_randomized/policy_1.pt"
+# policy_path: "{LEGGED_GYM_ROOT_DIR}/logs/g1_upper/May03_06-45-48_fullbody_isaaclab_randomized/policy_1.pt"
+# policy_path: "{LEGGED_GYM_ROOT_DIR}/logs/g1_upper_amp/May15_06-32-43_g1_upper_amp_mink/policy_1.pt"
+# policy_path: "{LEGGED_GYM_ROOT_DIR}/logs/g1_upper_amp/May16_08-28-05_g1_upper_amp_mink/policy_1.pt"
+# policy_path: "{LEGGED_GYM_ROOT_DIR}/logs/g1_upper_amp/May18_09-23-15_g1_upper_amp_mink/policy_1.pt"
+# policy_path: "{LEGGED_GYM_ROOT_DIR}/logs/g1_upper_amp/May19_08-00-14_g1_upper_amp_mink/policy_1.pt"
+policy_path: "{LEGGED_GYM_ROOT_DIR}/logs/g1_upper_amp/May20_06-31-49_g1_upper_amp_mink/policy_1.pt"
 xml_path: "{LEGGED_GYM_ROOT_DIR}/resources/robots/g1_description/g1_23dof.xml"
 
 simulation_duration: 60.0
@@ -37,5 +42,5 @@ joint_names: [
   right_elbow_joint, right_wrist_roll_joint
 ]
 
-# cmd_init: [0.5, 0.0, 0.0]
-cmd_init: [0.0, 0.0, 0.0]
+cmd_init: [0.5, 0.0, 0.0]
+# cmd_init: [0.0, 0.0, 0.0]

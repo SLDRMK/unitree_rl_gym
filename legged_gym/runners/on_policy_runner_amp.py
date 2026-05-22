@@ -9,6 +9,7 @@ import torch.nn.functional as F
 from rsl_rl.runners.on_policy_runner import OnPolicyRunner
 
 from legged_gym.runners.discriminator_amp import AMPDiscriminator
+from legged_gym.utils.helpers import extract_iteration_from_checkpoint_path
 
 
 class OnPolicyRunnerAMP(OnPolicyRunner):
@@ -165,6 +166,9 @@ class OnPolicyRunnerAMP(OnPolicyRunner):
 
             amp_r_roll_sum = torch.zeros(self.env.num_envs, dtype=torch.float, device=self.device)
 
+            pending_rew = []
+            pending_len = []
+
             with torch.inference_mode():
                 for i in range(self.num_steps_per_env):
                     actions = self.alg.act(obs, critic_obs)
@@ -172,7 +176,9 @@ class OnPolicyRunnerAMP(OnPolicyRunner):
                     obs, privileged_obs, rewards, dones, infos = self.env.step(actions)
 
                     if amp_amp_active:
-                        amp_obs_flat = torch.as_tensor(self.env.get_amp_observations(), device=self.device)
+                        amp_obs_flat = self.env.get_amp_observations()
+                        if amp_obs_flat.device != self.device:
+                            amp_obs_flat = amp_obs_flat.to(self.device)
                         logits_rl = self.disc(amp_obs_flat)
                         probs = torch.sigmoid(logits_rl)
                         log_eps = float(self.amp_cfg.get("reward_log_eps", 1e-8))
@@ -197,21 +203,31 @@ class OnPolicyRunnerAMP(OnPolicyRunner):
                             ep_infos.append(infos["episode"])
                         cur_reward_sum += rewards_dev
                         cur_episode_length += 1
-                        new_ids = (dones > 0).nonzero(as_tuple=False)
-                        rewbuffer.extend(cur_reward_sum[new_ids][:, 0].cpu().numpy().tolist())
-                        lenbuffer.extend(cur_episode_length[new_ids][:, 0].cpu().numpy().tolist())
-                        cur_reward_sum[new_ids] = 0
-                        cur_episode_length[new_ids] = 0
+                        new_ids = (dones > 0).nonzero(as_tuple=False).view(-1)
+                        if new_ids.numel() > 0:
+                            pending_rew.append(cur_reward_sum[new_ids].detach())
+                            pending_len.append(cur_episode_length[new_ids].detach())
+                            cur_reward_sum[new_ids] = 0
+                            cur_episode_length[new_ids] = 0
+
+                if self.log_dir is not None and pending_rew:
+                    rewbuffer.extend(torch.cat(pending_rew).cpu().numpy().tolist())
+                    lenbuffer.extend(torch.cat(pending_len).cpu().numpy().tolist())
 
                 collection_time = time.time() - start
 
+                t_returns = time.time()
                 self.alg.compute_returns(critic_obs.to(self.device))
+                returns_time = time.time() - t_returns
 
             self._last_amp_stats["mean_r_amp_scaled"] = amp_r_roll_sum.mean() / float(self.num_steps_per_env)
 
+            t_ppo = time.time()
             mean_value_loss, mean_surrogate_loss = self.alg.update()
+            ppo_time = time.time() - t_ppo
 
             amp_disc_loss_mean = None
+            t_disc = time.time()
             if getattr(self.env, "_motion_ref_bank", None) is not None and amp_amp_active:
                 amp_disc_loss_mean = self._update_discriminator_amp()
             else:
@@ -225,13 +241,17 @@ class OnPolicyRunnerAMP(OnPolicyRunner):
                     "fake_pool_rows",
                 ):
                     self._last_amp_stats.pop(_k, None)
+            disc_time = time.time() - t_disc
 
-            learn_time = time.time() - start - collection_time
+            learn_time = returns_time + ppo_time + disc_time
 
             locs = {
                 "it": it,
                 "collection_time": collection_time,
                 "learn_time": learn_time,
+                "learn_returns_time": returns_time,
+                "learn_ppo_time": ppo_time,
+                "learn_disc_amp_time": disc_time,
                 "mean_value_loss": mean_value_loss,
                 "mean_surrogate_loss": mean_surrogate_loss,
                 "rewbuffer": rewbuffer,
@@ -248,13 +268,31 @@ class OnPolicyRunnerAMP(OnPolicyRunner):
             ep_infos.clear()
 
             if it % self.save_interval == 0:
-                self.save(os.path.join(self.log_dir, "model_{}.pt".format(it)))
+                self.save(
+                    os.path.join(self.log_dir, "model_{}.pt".format(it)),
+                    learning_iteration=it,
+                )
 
         self.current_learning_iteration += num_learning_iterations
-        self.save(os.path.join(self.log_dir, "model_{}.pt".format(self.current_learning_iteration)))
+        self.save(
+            os.path.join(self.log_dir, "model_{}.pt".format(self.current_learning_iteration)),
+            learning_iteration=self.current_learning_iteration,
+        )
 
     def log(self, locs, width=80, pad=35):
         if self.writer is not None:
+            rt = locs.get("learn_returns_time")
+            pt = locs.get("learn_ppo_time")
+            dt_ = locs.get("learn_disc_amp_time")
+            if rt is not None:
+                self.writer.add_scalar("Timing/learn_returns", rt, locs["it"])
+            if pt is not None:
+                self.writer.add_scalar("Timing/learn_ppo", pt, locs["it"])
+            if dt_ is not None:
+                self.writer.add_scalar("Timing/learn_disc_amp", dt_, locs["it"])
+            ct = locs.get("collection_time")
+            if ct is not None:
+                self.writer.add_scalar("Timing/collection", ct, locs["it"])
             if locs.get("amp_disc_loss_mean") is not None:
                 self.writer.add_scalar("Loss/discriminator_amp", locs["amp_disc_loss_mean"], locs["it"])
             mr = locs.get("mean_r_amp_mean")
@@ -366,7 +404,19 @@ class OnPolicyRunnerAMP(OnPolicyRunner):
         dof_default = torch.as_tensor(self.env.default_dof_pos[0], device=device)
         osp = float(self.env.cfg.normalization.obs_scales.dof_pos)
         osv = float(self.env.cfg.normalization.obs_scales.dof_vel)
-        return bank.gather_amp_dof_features(cids, center_t, hl, dof_default, osp, osv)
+        hw = self.amp_cfg.get("history_window_s", None)
+        hw_f = float(hw) if hw is not None else None
+        if hw_f is not None and hw_f <= 0:
+            hw_f = None
+        return bank.gather_amp_dof_features(
+            cids,
+            center_t,
+            hl,
+            dof_default,
+            osp,
+            osv,
+            history_window_s=hw_f,
+        )
 
     def _update_discriminator_amp(self):
         flat = self.amp_obs_rollout.reshape(-1, self.flat_amp_dim)
@@ -466,12 +516,19 @@ class OnPolicyRunnerAMP(OnPolicyRunner):
             return None
         return tot_loss / float(n_batches_updated)
 
-    def save(self, path, infos=None):
+    def save(self, path, infos=None, learning_iteration=None):
+        # Parent rsl OnPolicyRunner only bumps current_learning_iteration after the whole learn() loop,
+        # so periodic ckpts would save wrong "iter" unless we pin the loop index explicitly.
+        it_save = (
+            self.current_learning_iteration
+            if learning_iteration is None
+            else learning_iteration
+        )
         torch.save(
             {
                 "model_state_dict": self.alg.actor_critic.state_dict(),
                 "optimizer_state_dict": self.alg.optimizer.state_dict(),
-                "iter": self.current_learning_iteration,
+                "iter": int(it_save),
                 "infos": infos,
                 "discriminator_state_dict": self.disc.state_dict(),
                 "discriminator_optimizer_state_dict": self.disc_opt.state_dict(),
@@ -492,7 +549,15 @@ class OnPolicyRunnerAMP(OnPolicyRunner):
         if dd is not None:
             self.disc.load_state_dict(dd)
 
-        self.current_learning_iteration = loaded_dict["iter"]
+        stored_it = loaded_dict.get("iter", None)
+        if stored_it is None:
+            stored_it = 0
+        stored_it = int(stored_it)
+        fn_it = extract_iteration_from_checkpoint_path(path)
+        if fn_it is not None and stored_it == 0 and fn_it > 0:
+            stored_it = fn_it
+
+        self.current_learning_iteration = stored_it
         self.reward_scale_amp = (
             float(self._lambda_amp_at_iter(int(self.current_learning_iteration)))
             if self._amp_curriculum_enabled and self._amp_schedule_pairs

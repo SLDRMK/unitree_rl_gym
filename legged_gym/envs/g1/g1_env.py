@@ -1,3 +1,5 @@
+import math
+
 from legged_gym.envs.base.legged_robot import LeggedRobot
 from legged_gym.utils.mink_reference_motion import build_mink_motion_bank
 
@@ -68,7 +70,7 @@ class G1Robot(LeggedRobot):
                 float(self.dt),
                 glob_pattern=getattr(mr, "glob_pattern", "*.pkl"),
                 clip_limit=getattr(mr, "clip_limit", None),
-                device=None,
+                device=self.device,
             )
             self._reset_motion_reference(torch.arange(self.num_envs, device=self.device))
             self._motion_ref_sigma_cur = float(mr.sigma)
@@ -90,11 +92,29 @@ class G1Robot(LeggedRobot):
                 "(or cfg.motion_ref.data_dir)."
             )
         self._amp_hist_len = max(1, int(getattr(amp_c, "history_frames", 4)))
+        window_s = getattr(amp_c, "history_window_s", None)
+        if window_s is not None and float(window_s) > 0:
+            need = int(math.ceil(float(window_s) / float(self.dt))) + 1
+            store_len = max(self._amp_hist_len, need)
+            self._amp_hist_store_len = store_len
+            self._amp_subsample_idx = torch.linspace(
+                0, store_len - 1, self._amp_hist_len, device=self.device
+            ).round().long().clamp(0, store_len - 1)
+        else:
+            self._amp_hist_store_len = self._amp_hist_len
+            self._amp_subsample_idx = torch.arange(
+                self._amp_hist_len, device=self.device, dtype=torch.long
+            )
+
         d = int(self.dof_pos.shape[-1])
         self._amp_dof_amp_dim = d * 2
         self._num_amp_flat = self._amp_hist_len * self._amp_dof_amp_dim
         self._amp_hist_buf = torch.zeros(
-            self.num_envs, self._amp_hist_len, self._amp_dof_amp_dim, dtype=torch.float, device=self.device
+            self.num_envs,
+            self._amp_hist_store_len,
+            self._amp_dof_amp_dim,
+            dtype=torch.float,
+            device=self.device,
         )
         self._reset_amp_history(torch.arange(self.num_envs, device=self.device))
 
@@ -111,7 +131,7 @@ class G1Robot(LeggedRobot):
         if not getattr(self, "_amp_enabled", False) or env_ids.numel() == 0:
             return
         snap = self._gather_amp_dof_snap()
-        stacked = snap[env_ids].unsqueeze(1).repeat(1, self._amp_hist_len, 1).clone()
+        stacked = snap[env_ids].unsqueeze(1).repeat(1, self._amp_hist_store_len, 1).clone()
         self._amp_hist_buf[env_ids] = stacked
 
     def _advance_amp_obs_history_from_current_state(self):
@@ -126,7 +146,9 @@ class G1Robot(LeggedRobot):
     def get_amp_observations(self):
         if not getattr(self, "_amp_enabled", False):
             raise RuntimeError("get_amp_observations() requires cfg.amp.enabled.")
-        return self._amp_hist_buf.reshape(self.num_envs, self._num_amp_flat)
+        idx = self._amp_subsample_idx
+        sub = self._amp_hist_buf[:, idx, :]
+        return sub.reshape(self.num_envs, self._num_amp_flat)
 
     def update_feet_state(self):
         self.gym.refresh_rigid_body_state_tensor(self.sim)
