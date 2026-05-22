@@ -18,9 +18,9 @@ Please refer to [setup.md](/doc/setup_en.md) for installation and configuration 
 
 We build expert motion from [**AMASS**](https://amass.is.tue.mpg.de/) (registration required on the [official download page](https://amass.is.tue.mpg.de/download.php)). For this project we use the **BMLrub**, **CMU**, and **KIT** subsets only (see walking filters below). Obey AMASS **license and citation** when redistributing or publishing.
 
-**Example — CMU Subject 07 SMPL poses** · source [`pics/07_01_poses_render.mp4`](pics/07_01_poses_render.mp4)
+**Example — CMU Subject 07 SMPL poses** · source [`pics/07_01_poses_render_rot0_15fps.gif`](pics/07_01_poses_render_rot0_15fps.gif)
 
-<video src="pics/07_01_poses_render.mp4" controls muted playsinline width="720"></video>
+<img src="pics/07_01_poses_render_rot0_15fps.gif" width="720" alt="CMU Subject 07 SMPL poses — rendered preview loop">
 
 ## 🔄 Motion retargeting (two pipelines)
 
@@ -33,9 +33,9 @@ Expert trajectories for `g1_upper_amp` / `g1_upper_motion_ref` must be **retarge
 - **Improvements in this fork (summary):** refactored **relative positional** `FrameTask`s from SMPL parent-local bone directions; **`TorsoUprightTask`** (penalizes lateral tilt of torso / pelvis / head local +Z); retuned costs (`ROOT_*`, `RELATIVE_*`, `POSTURE_SCALE`, `TORSO_UPRIGHT_SCALE`, etc.). Per-clip aggregates are written under `smpl_retarget/retargeted_motion_data/mink_adjust/<stem>.pkl` when using the shipped layout (`walking_candidates.jsonl` references `mink_aggregate_*`).
 - **Motivation:** the stock PBHC-style Mink stack could produce **pigeon‑toed legs**, a **hunched / forward‑leaning torso**, and **arms clamped too close to the body** when SMPL global targets were chased too aggressively without enough relative-bone and upright regularization. The tasks and weights above target those failure modes.
 
-**Example — Mink IK retarget (this fork)** · source [`pics/mink_retarget.webm`](pics/mink_retarget.webm)
+**Example — Mink IK retarget (this fork)** · source [`pics/mink_retarget_rot0_15fps.gif`](pics/mink_retarget_rot0_15fps.gif)
 
-<video src="pics/mink_retarget.webm" controls muted playsinline width="720"></video>
+<img src="pics/mink_retarget_rot0_15fps.gif" width="720" alt="Mink IK retarget on G1 — preview loop">
 
 **Walking / dataset filter (`convert_fit_motion.py`, `--filter-walking` / `--filter-only`):**
 
@@ -55,9 +55,9 @@ Full detail: [`AMASS-POST-PROCESS/smpl_retarget/README.md`](https://github.com/S
 - **Fork of** [YanjieZe/GMR](https://github.com/YanjieZe/GMR) (General Motion Retargeting).
 - **Why GMR often looks better (brief):** GMR formulates retargeting as a **whole-body** problem with an objective stack tuned for **stable, RL-friendly** robot motion (including default **joint velocity limits** and regularization that discourages joint locking and collapsed postures). That tends to avoid the **local minima** of “match every SMPL target at all costs,” which can still show up as **inward knees**, **rounded back**, or **over-adducted arms** when the per-frame task balance is wrong. In our experience on the same filtered AMASS walking clips, GMR’s solution is **smoother and more natural** for G1.
 
-**Example — GMR retarget** · source [`pics/gmr_retarget.webm`](pics/gmr_retarget.webm)
+**Example — GMR retarget** · source [`pics/gmr_retarget_rot0_15fps.gif`](pics/gmr_retarget_rot0_15fps.gif)
 
-<video src="pics/gmr_retarget.webm" controls muted playsinline width="720"></video>
+<img src="pics/gmr_retarget_rot0_15fps.gif" width="720" alt="GMR retarget on G1 — preview loop">
 
 - **Batch SMPL-X → robot:** `scripts/smplx_to_robot_dataset.py`. Enable **`--filter_walking`** with `--src_folder` pointing at an AMASS-style root containing **`CMU/`**, **`KIT/`**, **`BMLrub/`**, etc.
 - **Name filter (aligned with `convert_fit_motion.py` intent):**

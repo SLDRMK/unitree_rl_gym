@@ -18,9 +18,9 @@
 
 专家动作来自 [**AMASS**](https://amass.is.tue.mpg.de/)，需在 [官方下载页注册后获取](https://amass.is.tue.mpg.de/download.php)。本工作流仅使用 **BMLrub**、**CMU**、**KIT** 三个子集（与下文「行走筛选」一致）。分发或发表论文时请遵守 AMASS **许可与引用**要求。
 
-**示例 — CMU Subject 07 SMPL 姿态渲染** · 源文件 [`pics/07_01_poses_render.mp4`](pics/07_01_poses_render.mp4)
+**示例 — CMU Subject 07 SMPL 姿态渲染** · 源文件 [`pics/07_01_poses_render_rot0_15fps.gif`](pics/07_01_poses_render_rot0_15fps.gif)
 
-<video src="pics/07_01_poses_render.mp4" controls muted playsinline width="720"></video>
+<img src="pics/07_01_poses_render_rot0_15fps.gif" width="720" alt="CMU Subject 07 SMPL 姿态渲染预览">
 
 ## 🔄 动作重定向（两条管线）
 
@@ -33,9 +33,9 @@
 - **本 fork 改进要点（摘要）：** 重写**相对位置** `FrameTask`（在 SMPL 父关节局部帧内取骨方向）；增加 **`TorsoUprightTask`**（约束 pelvis / torso / head 等单位竖直方向，抑制侧倾）；代价权重重调（`ROOT_*`、`RELATIVE_*`、`POSTURE_SCALE`、`TORSO_UPRIGHT_SCALE` 等）。成功重定向后的**整段聚合 pickle** 写入 `smpl_retarget/retargeted_motion_data/mink_adjust/<stem>.pkl`（与 `walking_candidates.jsonl` 中 `mink_aggregate_*` 字段一致）。
 - **修改动机：** 原版 PBHC 系 Mink 栈在片面追求全局 SMPL 关键点贴合时，容易出现 **腿型内八（膝/踝内收）**、**躯干佝偻前倾**、**大臂夹着身体摆动不开**等次生姿态；上述相对骨长约束与躯干直立项即针对这些问题补强。
 
-**示例 — Mink IK 重定向（本 fork）** · 源文件 [`pics/mink_retarget.webm`](pics/mink_retarget.webm)
+**示例 — Mink IK 重定向（本 fork）** · 源文件 [`pics/mink_retarget_rot0_15fps.gif`](pics/mink_retarget_rot0_15fps.gif)
 
-<video src="pics/mink_retarget.webm" controls muted playsinline width="720"></video>
+<img src="pics/mink_retarget_rot0_15fps.gif" width="720" alt="本 fork Mink IK 重定向预览">
 
 **行走 / 数据集筛选（`convert_fit_motion.py`，`--filter-walking` / `--filter-only`）：**
 
@@ -55,9 +55,9 @@
 - **Fork 自** [YanjieZe/GMR](https://github.com/YanjieZe/GMR)。
 - **为何 GMR 往往效果更好（简述）：** GMR 将重定向视作**全身** IK/优化问题，目标与正则（含默认 **关节速度限幅**、防「锁在一侧」的过拟合惩罚等）偏向 **可对 RL 跟踪友好、物理上不过分扭曲**的解，而不是单帧无止境地「硬贴 SMPL」。这在同一套行走筛选数据上，通常能进一步减轻 **内八、含胸夹臂、局部姿态坍缩** 等局部极小。我们经验上 G1 的观感 **更自然、更顺滑**。
 
-**示例 — GMR 重定向** · 源文件 [`pics/gmr_retarget.webm`](pics/gmr_retarget.webm)
+**示例 — GMR 重定向** · 源文件 [`pics/gmr_retarget_rot0_15fps.gif`](pics/gmr_retarget_rot0_15fps.gif)
 
-<video src="pics/gmr_retarget.webm" controls muted playsinline width="720"></video>
+<img src="pics/gmr_retarget_rot0_15fps.gif" width="720" alt="GMR 重定向预览">
 
 - **批量 SMPL-X → 机器人：** `scripts/smplx_to_robot_dataset.py`，加 **`--filter_walking`**，`--src_folder` 指向 AMASS 式根目录（其下含 **`CMU/`**、**`KIT/`**、**`BMLrub/`** 等）。
 - **名称筛选（与 `convert_fit_motion.py` 的设计意图对齐）：**
