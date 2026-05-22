@@ -103,8 +103,8 @@ python legged_gym/scripts/train.py --task=xxx
 |------|------|
 | 任务 | **`--task`**：如 `go2`、`g1`、`h1`、`h1_2`；本文 G1 **23DoF**：**`g1_upper_amp`**（判别器 AMP 模仿，**主推**）、**`g1_upper`**（分阶段 PPO baseline）、**`g1_upper_motion_ref`**（逐步参考塑形，遗留、不推荐）。 |
 | 并行与设备 | **`--headless`**、**`--num_envs`**、**`--sim_device`**、**`--rl_device`**、**`--seed`** |
-| 停止条件 | **`--train_to_iteration`**：训练到全局 `learning_iteration` 目标（本次运行步数 \(\approx\) **`目标 − checkpoint.restored_iter`**）。未指定而仅用 **`--max_iterations`**（覆盖配置里的 **`runner.max_iterations`**）时，该整数表示 **本进程**里传给 **`learn(num_learning_iterations)`** 的次数：会**在原 `iter` 上累加**，续跑时注意不是「冲到固定总 iter」除非你自行换算。|
-| Checkpoint | **`--resume`** / **`--load_run`** / **`--checkpoint`**：凡走加载链路都会恢复**权重与** `current_learning_iteration`（**\(\lambda_{\mathrm{amp}}\) 课程依赖 `iter`**，勿混用期望值） |
+| 停止条件 | **`--train_to_iteration`**：训练到全局 `learning_iteration` 目标（本次运行步数 **≈** **`目标 − checkpoint.restored_iter`**）。未指定而仅用 **`--max_iterations`**（覆盖配置里的 **`runner.max_iterations`**）时，该整数表示 **本进程**里传给 **`learn(num_learning_iterations)`** 的次数：会**在原 `iter` 上累加**，续跑时注意不是「冲到固定总 iter」除非你自行换算。|
+| Checkpoint | **`--resume`** / **`--load_run`** / **`--checkpoint`**：凡走加载链路都会恢复**权重与** `current_learning_iteration`（**λ<sub>amp</sub>（AMP）课程依赖 `iter`**，勿混用期望值） |
 | G1 分阶段 | **`--training_stage`**：`upper_body` \| `joint_finetune`；**`--lower_body_checkpoint`** 仅 **`upper_body`**：`g1` 的 **`model_*.pt`**（**不要**填导出的 TorchScript） |
 | 日志目录 | **`--resume_fork`**：续跑时将 TB/权重写入**新时间戳目录**（与单次把配置里 **`runner.resume_continue_logdir=False`** 等效）；**`resume_continue_logdir` 不负责「要不要加载」，只决定是否沿用 checkpoint 原有 run 文件夹** |
 
@@ -159,7 +159,7 @@ bash legged_gym/scripts/train_g1_upper_motion_ref.sh
 
 #### G1：AMP 判别器模仿（**推荐主线**）
 
-任务 **`g1_upper_amp`**：用**二分类判别器**在短**多帧**窗口上读 \(\{q,\dot q\}\)（相对默认站立、与 env 观测同尺度），在 PPO 回报上叠加 **\(\lambda_{\mathrm{amp}} \cdot (-\log(\mathrm{clamp}(1-\sigma(D(x)),\varepsilon)))\)**。**`motion_ref_dof = 0`**，**无**逐步关节追踪奖励。
+任务 **`g1_upper_amp`**：用**二分类判别器**在短**多帧**窗口上读取**关节角度 q、角速度 q_dot**（相对默认站立、与 env 观测同尺度），在 PPO 回报上叠加 **λ<sub>amp</sub> · r_amp**，其中 **`r_amp = −log(clamp(1 − sigmoid(D(x)), eps))`**。**`motion_ref_dof = 0`**，**无**逐步关节追踪奖励。
 
 实验目录：**`logs/g1_upper_amp/`**。
 
@@ -186,11 +186,11 @@ bash legged_gym/scripts/train_g1_upper_amp.sh
 | 抽哪条 clip | **`MinkReferenceMotionBank.sample_clip_indices`**：**均匀随机** clip 下标。可用 **`motion_ref.clip_limit`** 截断「排序后路径列表」的前若干条（见 `build_mink_motion_bank`）。 |
 | clip 内相位 | **`sample_phase_times`**：在单条 clip 时长内**连续均匀**随机起点；按 **`policy_dt`** 线性插值、循环播放。 |
 
-##### \(\lambda_{\mathrm{amp}}\) 课程（模仿项介入节奏）
+##### λ<sub>amp</sub> 课程（模仿项介入节奏）
 
-由 **`G1UpperBodyAmpCfg.amp`** 控制。默认 **`curriculum_enabled = True`**、**`curriculum_interp_between_milestones = False`** → \(\lambda_{\mathrm{amp}}\) **阶梯常数**（里程碑之间**不**线性插值）。
+由 **`G1UpperBodyAmpCfg.amp`** 控制。默认 **`curriculum_enabled = True`**、**`curriculum_interp_between_milestones = False`** → **λ<sub>amp</sub> 为阶梯常数**（里程碑之间**不**线性插值）。
 
-| 里程碑（`learning_iteration` ≥） | \(\lambda_{\mathrm{amp}}\) |
+| 里程碑（`learning_iteration` ≥） | λ<sub>amp</sub> |
 |:---:|:---:|
 | 0 | 0.000 |
 | 2000 | 0.035 |
@@ -200,7 +200,7 @@ bash legged_gym/scripts/train_g1_upper_amp.sh
 
 **`λ = 0`** 阶段：因 **`min_scale_for_amp_disc = 0.0`**，**不跑判别器前向与反传**（纯 PPO 行走）。若 **`curriculum_enabled = False`**，则使用常数 **`reward_scale = 0.25`**。
 
-训练器默认 **`G1UpperBodyAmpCfgPPO.runner.max_iterations = 25000`**（可用 **`--max_iterations`** 覆盖）；自迭代 **≥18000** 起 \(\lambda\) 保持 **0.15** 直至结束（除非改课程或拉长 run）。
+训练器默认 **`G1UpperBodyAmpCfgPPO.runner.max_iterations = 25000`**（可用 **`--max_iterations`** 覆盖）；自迭代 **≥18000** 起 **λ<sub>amp</sub>** 保持 **0.15** 直至结束（除非改课程或拉长 run）。
 
 ##### 判别器结构与学习率
 
@@ -222,7 +222,7 @@ bash legged_gym/scripts/train_g1_upper_amp.sh
 | 项 | 默认 |
 |----|------|
 | **`disc_stop_train_accuracy_above`** | **`0.85`** — 单 minibatch **平衡**硬分类准确率过高则**跳过**该 batch 的 D 更新 |
-| **`fake_amp_pool_capacity_rows`** | **`-1`** — 自动容量 \(\max(8192, 8\times\text{steps}\times\text{envs})\) |
+| **`fake_amp_pool_capacity_rows`** | **`-1`** — 自动容量 **max(8192, 8×steps×envs)** |
 | **`fake_pool_overflow_resample`** / **`fake_pool_mix_fraction`** | **`True`** / **`0.5`** — 负样本混合 **历史池** 与 **当前 rollout** |
 | **`train_feature_mask_prob`** | **`0.1`** — 仅 **训练**时对判别器输入做特征维随机 mask |
 | 时序堆叠 | **`history_frames = 10`**、**`history_window_s = 0.9`** — 在 **`history_window_s`** 秒窗内**均匀**取 **10** 帧拼成 `D` 的输入（见 **`gather_amp_dof_features`**） |
@@ -360,6 +360,30 @@ python deploy/deploy_mujoco/deploy_mujoco.py g1_upper_composite.yaml
 - `policy_path` 可以是 23DoF 策略，部署脚本会自动取上半身部分；也可以是只输出上半身动作的策略。
 - `upper_body_action_scale` 用于缩放上半身动作幅度。
 - `clip_actions` 用于部署时裁剪策略输出动作，默认配置为 `1.0`，可避免 MuJoCo 中过大的未约束动作造成瞬间失稳。
+
+#### MuJoCo 中 Play 效果（GIF）
+
+以下为本仓库记录的 **MuJoCo `deploy_mujoco` 侧视 / 环绕** 观感（文件名 `*_rot0_15fps.gif`）；与 Isaac 训练任务的大致对应关系如下（具体 `policy_path` 以 yaml 为准）：
+
+1. **Benchmark：下半身 12DoF（`g1`）** — 配置入口 [`deploy/deploy_mujoco/configs/g1.yaml`](deploy/deploy_mujoco/configs/g1.yaml) · [`pics/g1_rot0_15fps.gif`](pics/g1_rot0_15fps.gif)
+
+<img src="pics/g1_rot0_15fps.gif" width="720" alt="MuJoCo：G1 12DoF 下半身 baseline 行走">
+
+2. **冻结下半身策略，上半身单独训练后与下肢组合推理（`upper_body` + composite）** — [`g1_upper_composite.yaml`](deploy/deploy_mujoco/configs/g1_upper_composite.yaml) · [`pics/g1_upper_composite_rot0_15fps.gif`](pics/g1_upper_composite_rot0_15fps.gif)
+
+<img src="pics/g1_upper_composite_rot0_15fps.gif" width="720" alt="MuJoCo：上下肢组合推理，冻结下半身">
+
+3. **全身训练，对手臂摆动施加强约束（`g1_upper`，`joint_finetune`，单策略 23DoF）** — [`g1_23dof.yaml`](deploy/deploy_mujoco/configs/g1_23dof.yaml) · [`pics/g1_fullbody_rot0_15fps.gif`](pics/g1_fullbody_rot0_15fps.gif)
+
+<img src="pics/g1_fullbody_rot0_15fps.gif" width="720" alt="MuJoCo：全身训练但上肢受约束的典型步态">
+
+4. **参考运动塑形（`g1_upper_motion_ref`）** — [`pics/g1_motion_ref_rot0_15fps.gif`](pics/g1_motion_ref_rot0_15fps.gif)
+
+<img src="pics/g1_motion_ref_rot0_15fps.gif" width="720" alt="MuJoCo：motion reference 策略演示">
+
+5. **AMP 判别器模仿（`g1_upper_amp`，推荐主线）** — [`pics/g1_amp_rot0_15fps.gif`](pics/g1_amp_rot0_15fps.gif)
+
+<img src="pics/g1_amp_rot0_15fps.gif" width="720" alt="MuJoCo：AMP 策略行走演示">
 
 #### 可视化相机（可选）
 

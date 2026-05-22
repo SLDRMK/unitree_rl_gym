@@ -158,8 +158,57 @@ cython_debug/
 .idea/
 .vscode
 
-# logs
-logs
+# Isaac Gym / legged_gym rollout logs — ignore by default; allow-list below matches
+# TorchScript paths referenced in deploy/deploy_mujoco/configs/g1.yaml,
+# g1_23dof.yaml, g1_upper_composite.yaml (including commented policy_path lines).
+/logs/*
+!/logs/g1/
+/logs/g1/*
+!/logs/g1/Apr13_07-17-29_/
+/logs/g1/Apr13_07-17-29_/*
+!/logs/g1/Apr13_07-17-29_/policy_lstm_1.pt
 
-# # pics / videos
-# pics/
+!/logs/g1_upper/
+/logs/g1_upper/*
+!/logs/g1_upper/May02_11-49-23_fullbody_isaaclab_randomized/
+/logs/g1_upper/May02_11-49-23_fullbody_isaaclab_randomized/*
+!/logs/g1_upper/May02_11-49-23_fullbody_isaaclab_randomized/policy_1.pt
+!/logs/g1_upper/May03_06-45-48_fullbody_isaaclab_randomized/
+/logs/g1_upper/May03_06-45-48_fullbody_isaaclab_randomized/*
+!/logs/g1_upper/May03_06-45-48_fullbody_isaaclab_randomized/policy_1.pt
+!/logs/g1_upper/May02_11-49-20_stage2_upper_stable/
+/logs/g1_upper/May02_11-49-20_stage2_upper_stable/*
+!/logs/g1_upper/May02_11-49-20_stage2_upper_stable/policy_1.pt
+!/logs/g1_upper/May03_06-46-17_stage2_upper_stable/
+/logs/g1_upper/May03_06-46-17_stage2_upper_stable/*
+!/logs/g1_upper/May03_06-46-17_stage2_upper_stable/policy_1.pt
+
+!/logs/g1_upper_motion_ref/
+/logs/g1_upper_motion_ref/*
+!/logs/g1_upper_motion_ref/May13_12-16-09_g1_upper_motion_ref_mink/
+/logs/g1_upper_motion_ref/May13_12-16-09_g1_upper_motion_ref_mink/*
+!/logs/g1_upper_motion_ref/May13_12-16-09_g1_upper_motion_ref_mink/policy_1.pt
+
+!/logs/g1_upper_amp/
+/logs/g1_upper_amp/*
+!/logs/g1_upper_amp/May15_06-32-43_g1_upper_amp_mink/
+/logs/g1_upper_amp/May15_06-32-43_g1_upper_amp_mink/*
+!/logs/g1_upper_amp/May15_06-32-43_g1_upper_amp_mink/policy_1.pt
+!/logs/g1_upper_amp/May16_08-28-05_g1_upper_amp_mink/
+/logs/g1_upper_amp/May16_08-28-05_g1_upper_amp_mink/*
+!/logs/g1_upper_amp/May16_08-28-05_g1_upper_amp_mink/policy_1.pt
+!/logs/g1_upper_amp/May18_09-23-15_g1_upper_amp_mink/
+/logs/g1_upper_amp/May18_09-23-15_g1_upper_amp_mink/*
+!/logs/g1_upper_amp/May18_09-23-15_g1_upper_amp_mink/policy_1.pt
+!/logs/g1_upper_amp/May19_08-00-14_g1_upper_amp_mink/
+/logs/g1_upper_amp/May19_08-00-14_g1_upper_amp_mink/*
+!/logs/g1_upper_amp/May19_08-00-14_g1_upper_amp_mink/policy_1.pt
+!/logs/g1_upper_amp/May20_06-31-49_g1_upper_amp_mink/
+/logs/g1_upper_amp/May20_06-31-49_g1_upper_amp_mink/*
+!/logs/g1_upper_amp/May20_06-31-49_g1_upper_amp_mink/policy_1.pt
+
+# g1.yaml default bundled policy (safe no-op if no broader deploy/*.pt ignore)
+!/deploy/pre_train/g1/motion.pt
+
+# pics / videos
+pics/*.webm

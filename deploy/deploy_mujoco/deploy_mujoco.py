@@ -266,13 +266,13 @@ if __name__ == "__main__":
     parser.add_argument(
         "--camera-follow-side",
         choices=("none", "right", "left"),
-        default="none",
+        default="right",
         help="侧向锁定相机（MuJoCo 跟踪模式）：在机器人身体坐标系固定方位角与距离并随躯干运动。默认 none（自由视角）。",
     )
     parser.add_argument(
         "--camera-follow-distance",
         type=float,
-        default=2.8,
+        default=2.5,
         help="跟踪相机与被跟踪 body's 焦距距离（MuJoCo 球坐标半径），默认 2.8。",
     )
     parser.add_argument(

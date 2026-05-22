@@ -1,5 +1,5 @@
-# policy_path: "{LEGGED_GYM_ROOT_DIR}/logs/g1_upper/May02_11-49-20_stage2_upper_stable/policy_1.pt"
-policy_path: "{LEGGED_GYM_ROOT_DIR}/logs/g1_upper/May03_06-46-17_stage2_upper_stable/policy_1.pt"
+policy_path: "{LEGGED_GYM_ROOT_DIR}/logs/g1_upper/May02_11-49-20_stage2_upper_stable/policy_1.pt"
+# policy_path: "{LEGGED_GYM_ROOT_DIR}/logs/g1_upper/May03_06-46-17_stage2_upper_stable/policy_1.pt"
 lower_body_policy_path: "{LEGGED_GYM_ROOT_DIR}/logs/g1/Apr13_07-17-29_/policy_lstm_1.pt"
 xml_path: "{LEGGED_GYM_ROOT_DIR}/resources/robots/g1_description/g1_23dof.xml"
 
@@ -41,5 +41,5 @@ lower_body_num_actions: 12
 lower_body_num_obs: 47
 upper_body_action_scale: 0.55
 
-# cmd_init: [0.5, 0.0, 0.0]
-cmd_init: [0.0, 0.0, 0.0]
+cmd_init: [0.5, 0.0, 0.0]
+# cmd_init: [0.0, 0.0, 0.0]

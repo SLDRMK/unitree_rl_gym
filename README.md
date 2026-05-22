@@ -103,8 +103,8 @@ python legged_gym/scripts/train.py --task=xxx
 |--------|-------------------|
 | Task | **`--task`** — e.g. `go2`, `g1`, `h1`, `h1_2`. For Unitree **G1 23‑DoF**: **`g1_upper_amp`** (discriminator imitation, **recommended** main line here), **`g1_upper`** (staged baseline PPO), **`g1_upper_motion_ref`** (dense per‑step shaping; legacy / not recommended). |
 | Rendering & devices | **`--headless`**, **`--sim_device`**, **`--rl_device`**, **`--num_envs`**, **`--seed`** |
-| How long to train | **`--max_iterations`** (→ `learn(num_learning_iterations)`) executes that many optimisation passes **starting from restored** `current_learning_iteration` (**additive on resume**, not usually a fixed global ceiling). Prefer **`--train_to_iteration`** to stop at an absolute **`iter`** value — remaining \(\approx\) target **`−`** restored `iter`. |
-| Checkpoints | **`--resume`**, **`--load_run`**, **`--checkpoint`** — any loader path restores **weights and** `current_learning_iteration` (**required** for \(\lambda_{\mathrm{amp}}\) milestones to align). |
+| How long to train | **`--max_iterations`** (→ `learn(num_learning_iterations)`) executes that many optimisation passes **starting from restored** `current_learning_iteration` (**additive on resume**, not usually a fixed global ceiling). Prefer **`--train_to_iteration`** to stop at an absolute **`iter`** value — remaining **≈** target **`−`** restored `iter`. |
+| Checkpoints | **`--resume`**, **`--load_run`**, **`--checkpoint`** — any loader path restores **weights and** `current_learning_iteration` (**required** for λ<sub>amp</sub> milestones to align). |
 | G1 staging | **`--training_stage`** = `upper_body` \| `joint_finetune`; **`--lower_body_checkpoint`**: training **`model_*.pt`** for 12‑DoF **`g1`**, never the exported TorchScript policy. |
 | TensorBoard folders | **`--resume_fork`** (CLI) ≡ one‑shot **`runner.resume_continue_logdir = False`** in config: **new** dated run folder while **still** loading checkpoint; **`resume_continue_logdir`** does **not** turn loading on/off—only **reuse vs new** directory. |
 
@@ -125,13 +125,13 @@ bash legged_gym/scripts/train_g1_upper_motion_ref.sh
 
 If **`motion_ref.data_dir`** is empty in Python config you **must** set **`MOTION_REF_DATA_DIR`** (or training fails at env init).
 
-**Tune** (**`G1UpperBodyMotionRefCfg`**, **`motion_ref`** / rewards in [`g1_config.py`](legged_gym/envs/g1/g1_config.py)): **`motion_ref_dof`**, **`motion_ref.err_reduce`** (`mean` vs `sum`), **`command_gate`**, **`motion_ref.sigma` / `sigma_min`** — σ is rad scale on the \(\|q−q_{\mathrm{ref}}\|_2\) vector magnitude; **`curriculum_norm_ema_alpha`**, etc.
+**Tune** (**`G1UpperBodyMotionRefCfg`**, **`motion_ref`** / rewards in [`g1_config.py`](legged_gym/envs/g1/g1_config.py)): **`motion_ref_dof`**, **`motion_ref.err_reduce`** (`mean` vs `sum`), **`command_gate`**, **`motion_ref.sigma` / `sigma_min`** — σ is rad scale on the **L2 norm ‖q−q<sub>ref</sub>‖** of the joint-error vector; **`curriculum_norm_ema_alpha`**, etc.
 
 ---
 
 #### G1: AMP‑style imitation (**recommended**)
 
-Task **`g1_upper_amp`** uses a **binary discriminator** on a short **multi‑frame** window of \(\{\, q,\dot q \,\}\) (relative default pose × env scaling) and adds **`r_amp = -\log\left(\mathrm{clamp}(1 - \sigma(\mathrm{D}(x)), \varepsilon)\right)`** weighted by \(\lambda_{\mathrm{amp}}\) to the PPO return. **`motion_ref_dof` = 0** — **no** dense joint‑tracking bonus.
+Task **`g1_upper_amp`** uses a **binary discriminator** on a short **multi‑frame** window of **joint positions q and velocities q_dot** (relative default pose × env scaling) and adds **`λ<sub>amp</sub> · r_amp`** to the rollout reward, where **`r_amp = −log(clamp(1 − sigmoid(D(x)), eps))`**. **`motion_ref_dof` = 0** — **no** dense joint‑tracking bonus.
 
 Experiment directory: **`logs/g1_upper_amp/`**.
 
@@ -155,14 +155,14 @@ Equivalent: **`python legged_gym/scripts/train.py --task=g1_upper_amp --training
 
 | Mechanism | Implementation / parameters |
 |-----------|------------------------------|
-| Which clip | **`MinkReferenceMotionBank.sample_clip_indices`** — **uniform random** clip index \(\in \{0,N_{\mathrm{clips}}-1\}\). Limit files with **`motion_ref.clip_limit`** (truncate sorted path list — see [`build_mink_motion_bank`](legged_gym/utils/mink_reference_motion.py)). |
+| Which clip | **`MinkReferenceMotionBank.sample_clip_indices`** — **uniform random** clip index in **0 … N_clips−1**. Limit files with **`motion_ref.clip_limit`** (truncate sorted path list — see [`build_mink_motion_bank`](legged_gym/utils/mink_reference_motion.py)). |
 | Which phase inside a clip | **`sample_phase_times`** — continuous **uniform** over each clip duration; loops with linear interp at **`policy_dt`**. |
 
-##### \(\lambda_{\mathrm{amp}}\) curriculum (reward mixing)
+##### λ<sub>amp</sub> curriculum (reward mixing)
 
-Controlled by **`G1UpperBodyAmpCfg.amp`**. Default **`curriculum_enabled = True`**, **`curriculum_interp_between_milestones = False`** → \(\lambda_{\mathrm{amp}}\) is **piecewise constant** (**no** interpolation between breakpoints).
+Controlled by **`G1UpperBodyAmpCfg.amp`**. Default **`curriculum_enabled = True`**, **`curriculum_interp_between_milestones = False`** → **λ<sub>amp</sub> is piecewise constant** (**no** interpolation between breakpoints).
 
-| Milestone (`learning_iteration` ≥) | \(\lambda_{\mathrm{amp}}\) |
+| Milestone (`learning_iteration` ≥) | λ<sub>amp</sub> |
 |:---:|:---:|
 | 0 | 0.000 |
 | 2000 | 0.035 |
@@ -170,7 +170,7 @@ Controlled by **`G1UpperBodyAmpCfg.amp`**. Default **`curriculum_enabled = True`
 | 12000 | 0.100 |
 | 18000 | 0.150 |
 
-Early phase keeps **`λ = 0`**: discriminator **skipped** (**`min_scale_for_amp_disc = 0.0`**, i.e. no forward/backprop when \(\lambda\le0\)). Fallback constant **`reward_scale = 0.25`** applies when **`curriculum_enabled`** is **`False`**. Trainer default **`runner.max_iterations = 25000`** (\(\lambda\) stays at **0.15** from iter **18000** onward unless you lengthen or edit schedule).
+Early phase keeps **`λ<sub>amp</sub> = 0`**: discriminator **skipped** (**`min_scale_for_amp_disc = 0.0`**, i.e. no forward/backprop when **λ<sub>amp</sub> ≤ 0**). Fallback constant **`reward_scale = 0.25`** applies when **`curriculum_enabled`** is **`False`**. Trainer default **`runner.max_iterations = 25000`** (**λ<sub>amp</sub>** stays at **0.15** from iter **18000** onward unless you lengthen or edit schedule).
 
 ##### Discriminator optimisation (architecture & LR)
 
@@ -192,7 +192,7 @@ Configured in **`G1UpperBodyAmpCfg.amp`** (mirror under **`train_cfg['amp']`**).
 | Item | Default |
 |------|---------|
 | **`disc_stop_train_accuracy_above`** | **`0.85`** — pause discriminator minibatches whose **balanced** hard accuracy exceeds the threshold (**mitigate D collapsing / overfitting**) |
-| **`fake_amp_pool_capacity_rows`** | **`-1`** — auto \(\max(8192, 8 \times\text{steps}\times\text{envs})\) policy‑feature rows |
+| **`fake_amp_pool_capacity_rows`** | **`-1`** — auto **max(8192, 8 × steps × envs)** policy‑feature rows |
 | **`fake_pool_overflow_resample`**, **`fake_pool_mix_fraction`** | **`True`**, **`0.5`** — minibatch negatives mix **replay pool** ↔ **fresh rollout** |
 | **`train_feature_mask_prob`** | **`0.1`** — dropout‑style masking on **training‑time** discriminator inputs |
 | Temporal stack | **`history_frames = 10`**, **`history_window_s = 0.9`** — samples **uniformly spaced in time** spanning the last **`history_window_s`** seconds up to anchor time (see **`gather_amp_dof_features`**). |
@@ -200,7 +200,7 @@ Configured in **`G1UpperBodyAmpCfg.amp`** (mirror under **`train_cfg['amp']`**).
 ##### Logging & reproducibility
 
 - TensorBoard (**readouts** include **`AMP/lambda_amp`**, **`AMP/mean_step_amp_scaled`**, discriminator accuracies vs skip counts, **`Timing/learn_disc_amp`**, …).  
-- **Resume semantics**: restored **`iter`** must match \(\lambda_{\mathrm{amp}}\) schedule milestones; **`--train_to_iteration`** or edited **`reward_scale_schedule_iters`** avoids “silent” mismatches vs wall‑clock checkpoints.
+- **Resume semantics**: restored **`iter`** must match λ<sub>amp</sub> schedule milestones; **`--train_to_iteration`** or edited **`reward_scale_schedule_iters`** avoids “silent” mismatches vs wall‑clock checkpoints.
 
 _All numeric defaults above refer to [`legged_gym/envs/g1/g1_config.py`](legged_gym/envs/g1/g1_config.py) (`G1UpperBodyAmpCfg`, `G1UpperBodyAmpCfgPPO`)._ 
 
@@ -284,6 +284,40 @@ Options: **`--camera-follow-side`** `none`|`right`|`left`, **`--camera-follow-di
 #### ➡️ Replace Network Model
 
 The default model is located at `deploy/pre_train/{robot}/motion.pt`; custom-trained models are saved in `logs/g1/exported/policies/policy_lstm_1.pt`. Update the `policy_path` in the YAML configuration file accordingly.
+
+**G1 preset configs** (under [`deploy/deploy_mujoco/configs/`](deploy/deploy_mujoco/configs/)):
+
+```bash
+python deploy/deploy_mujoco/deploy_mujoco.py g1.yaml                 # 12‑DoF lower body
+python deploy/deploy_mujoco/deploy_mujoco.py g1_23dof.yaml           # single exported 23‑DoF TorchScript
+python deploy/deploy_mujoco/deploy_mujoco.py g1_upper_composite.yaml # lower‑body `policy_lstm_1.pt` + upper/full `policy_1.pt`
+```
+
+See YAML comments for which `logs/.../policy_*.pt` each line points at.
+
+#### MuJoCo play recordings (GIF)
+
+Side / orbit captures from this repo’s MuJoCo viewer (`*_rot0_15fps.gif`). Rough mapping to Isaac **tasks** (point `policy_path` in YAML at your exported checkpoint):
+
+1. **Benchmark — 12‑DoF lower‑body locomotion (`g1`, [`g1.yaml`](deploy/deploy_mujoco/configs/g1.yaml))** — [`pics/g1_rot0_15fps.gif`](pics/g1_rot0_15fps.gif)
+
+<img src="pics/g1_rot0_15fps.gif" width="720" alt="MuJoCo play: G1 12‑DoF baseline gait">
+
+2. **Upper‑body policy with frozen lower body (composite rollout, [`g1_upper_composite.yaml`](deploy/deploy_mujoco/configs/g1_upper_composite.yaml))** — [`pics/g1_upper_composite_rot0_15fps.gif`](pics/g1_upper_composite_rot0_15fps.gif)
+
+<img src="pics/g1_upper_composite_rot0_15fps.gif" width="720" alt="MuJoCo play: composite upper + frozen lower TorchScript">
+
+3. **Full‑body training with constrained arm swing (`g1_upper` + `joint_finetune`, single exported 23‑DoF policy, [`g1_23dof.yaml`](deploy/deploy_mujoco/configs/g1_23dof.yaml))** — [`pics/g1_fullbody_rot0_15fps.gif`](pics/g1_fullbody_rot0_15fps.gif)
+
+<img src="pics/g1_fullbody_rot0_15fps.gif" width="720" alt="MuJoCo play: full body with restrained arm motion">
+
+4. **Dense motion‑reference imitation (`g1_upper_motion_ref`)** — [`pics/g1_motion_ref_rot0_15fps.gif`](pics/g1_motion_ref_rot0_15fps.gif)
+
+<img src="pics/g1_motion_ref_rot0_15fps.gif" width="720" alt="MuJoCo play: motion reference policy">
+
+5. **AMP discriminator shaping (`g1_upper_amp`)** — [`pics/g1_amp_rot0_15fps.gif`](pics/g1_amp_rot0_15fps.gif)
+
+<img src="pics/g1_amp_rot0_15fps.gif" width="720" alt="MuJoCo play: AMP imitation policy">
 
 ### 4. Sim2Real (Physical Deployment)
 

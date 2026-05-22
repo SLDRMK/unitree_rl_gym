@@ -1,5 +1,9 @@
+# # fullbody
 # policy_path: "{LEGGED_GYM_ROOT_DIR}/logs/g1_upper/May02_11-49-23_fullbody_isaaclab_randomized/policy_1.pt"
 # policy_path: "{LEGGED_GYM_ROOT_DIR}/logs/g1_upper/May03_06-45-48_fullbody_isaaclab_randomized/policy_1.pt"
+# # motion reference
+# policy_path: "{LEGGED_GYM_ROOT_DIR}/logs/g1_upper_motion_ref/May13_12-16-09_g1_upper_motion_ref_mink/policy_1.pt"
+# # amp
 # policy_path: "{LEGGED_GYM_ROOT_DIR}/logs/g1_upper_amp/May15_06-32-43_g1_upper_amp_mink/policy_1.pt"
 # policy_path: "{LEGGED_GYM_ROOT_DIR}/logs/g1_upper_amp/May16_08-28-05_g1_upper_amp_mink/policy_1.pt"
 # policy_path: "{LEGGED_GYM_ROOT_DIR}/logs/g1_upper_amp/May18_09-23-15_g1_upper_amp_mink/policy_1.pt"
