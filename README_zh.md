@@ -93,110 +93,146 @@
 
 ### 1. 训练
 
-运行以下命令进行训练：
-
 ```bash
 python legged_gym/scripts/train.py --task=xxx
 ```
 
-#### ⚙️  参数说明
-- `--task`: 必选参数；常用 `go2`, `g1`, `h1`, `h1_2`。G1 全身：**`g1_upper_amp`**（本文主线判别器 AMP）、**`g1_upper`**（分阶段 baseline）、**`g1_upper_motion_ref`**（遗留逐步参考塑形，不推荐）。
-- `--headless`: 默认启动图形界面，设为 true 时不渲染图形界面（效率更高）
-- `--resume`: 从日志中选择 checkpoint 继续训练
-- `--experiment_name`: 运行/加载的 experiment 名称
-- `--run_name`: 运行/加载的 run 名称
-- `--load_run`: 加载运行的名称，默认加载最后一次运行
-- `--checkpoint`: checkpoint 编号，默认加载最新一次文件
-- `--num_envs`: 并行训练的环境个数
-- `--seed`: 随机种子
-- `--max_iterations`: 训练的最大迭代次数
-- `--sim_device`: 仿真计算设备，指定 CPU 为 `--sim_device=cpu`
-- `--rl_device`: 强化学习计算设备，指定 CPU 为 `--rl_device=cpu`
-- `--training_stage`: G1 23DoF 分阶段训练模式，可选 `upper_body` 或 `joint_finetune`
-- `--lower_body_checkpoint`: `upper_body` 阶段使用的 12DoF 下半身训练 checkpoint，例如 `logs/g1/xxx/model_10000.pt`
-- `--resume_fork`：**读 checkpoint** 时仍恢复迭代计数，但 TensorBoard/保存写入**新的时间戳 run 子目录**（不写回 checkpoint 原目录）；与配置里单次将 `runner.resume_continue_logdir` 设为 `False` 的效果一致。
-- `--train_to_iteration`: 训练到**全局迭代步**（本轮剩余迭代数约为 `目标值 − checkpoint 恢复的 iter`，会覆盖仅用 `--max_iterations` 相加的语义）。
+#### ⚙️ 常用命令行参数
 
-**续跑与日志目录**
+| 类别 | 说明 |
+|------|------|
+| 任务 | **`--task`**：如 `go2`、`g1`、`h1`、`h1_2`；本文 G1 **23DoF**：**`g1_upper_amp`**（判别器 AMP 模仿，**主推**）、**`g1_upper`**（分阶段 PPO baseline）、**`g1_upper_motion_ref`**（逐步参考塑形，遗留、不推荐）。 |
+| 并行与设备 | **`--headless`**、**`--num_envs`**、**`--sim_device`**、**`--rl_device`**、**`--seed`** |
+| 停止条件 | **`--train_to_iteration`**：训练到全局 `learning_iteration` 目标（本次运行步数 \(\approx\) **`目标 − checkpoint.restored_iter`**）。未指定而仅用 **`--max_iterations`**（覆盖配置里的 **`runner.max_iterations`**）时，该整数表示 **本进程**里传给 **`learn(num_learning_iterations)`** 的次数：会**在原 `iter` 上累加**，续跑时注意不是「冲到固定总 iter」除非你自行换算。|
+| Checkpoint | **`--resume`** / **`--load_run`** / **`--checkpoint`**：凡走加载链路都会恢复**权重与** `current_learning_iteration`（**\(\lambda_{\mathrm{amp}}\) 课程依赖 `iter`**，勿混用期望值） |
+| G1 分阶段 | **`--training_stage`**：`upper_body` \| `joint_finetune`；**`--lower_body_checkpoint`** 仅 **`upper_body`**：`g1` 的 **`model_*.pt`**（**不要**填导出的 TorchScript） |
+| 日志目录 | **`--resume_fork`**：续跑时将 TB/权重写入**新时间戳目录**（与单次把配置里 **`runner.resume_continue_logdir=False`** 等效）；**`resume_continue_logdir` 不负责「要不要加载」，只决定是否沿用 checkpoint 原有 run 文件夹** |
 
-- **`--resume`**：加载权重并恢复 **`current_learning_iteration`**（用于 \(\lambda_{\mathrm{amp}}\) 等课程）。  
-- 命令行若指定 **`--checkpoint`** 或 **`--load_run`**，也会**自动启用与 resume 相同的加载逻辑**。  
-- 配置项 **`resume_continue_logdir`**（见 `legged_robot_config.py` 里 `runner`）**只决定**沿用 checkpoint 目录还是新建目录，**不负责**「是否加载模型」。
+**默认保存**：**`logs/<experiment_name>/<date_time>_<run_name>/model_<iteration>.pt`**；AMP 权重另含判别器 **`discriminator_state_dict`**（及判别器优化器状态）。
 
-**默认保存训练结果**：`logs/<experiment_name>/<date_time>_<run_name>/model_<iteration>.pt`
+---
 
-#### G1 分阶段训练
+#### G1 分阶段训练（无 AMP — baseline PPO）
 
-仓库额外提供了 G1 23DoF 训练流程：
+- **`g1`**：12DoF 下半身。
+- **`g1_upper + upper_body`**：下肢由 **`g1` checkpoint** 固定，上肢策略学习。
+- **`g1_upper + joint_finetune`**：23DoF 全身微调/联合训练。
 
-- `g1`: 原始 12DoF 下半身策略。
-- `g1_upper + upper_body`: 23DoF 机器人中，下半身由 12DoF checkpoint 控制，上半身策略训练。
-- `g1_upper + joint_finetune`: 23DoF 全身联合训练或微调。
-
-第二阶段训练上半身：
+上半身阶段示例：
 
 ```bash
 bash legged_gym/scripts/train_g1_upper_stage2.sh
 ```
 
-也可以手动指定下半身 checkpoint：
+也可指定下半身权重：
 
 ```bash
 LOWER_BODY_CHECKPOINT=logs/g1/Apr13_07-17-29_/model_10000.pt \
-NUM_ENVS=4096 \
-MAX_ITERATIONS=10000 \
-RUN_NAME=stage2_upper_stable \
+NUM_ENVS=4096 MAX_ITERATIONS=10000 RUN_NAME=stage2_upper_stable \
 bash legged_gym/scripts/train_g1_upper_stage2.sh
 ```
 
-全身 23DoF 训练：
+全身 **`joint_finetune`**：
 
 ```bash
 bash legged_gym/scripts/train_g1_fullbody_isaaclab.sh
 ```
 
-该脚本使用 `g1_upper` 任务和 `joint_finetune` 阶段，不加载下半身 checkpoint，策略直接输出 23 维动作。
-当前示例日志目录为 `logs/g1_upper/May02_11-49-23_fullbody_isaaclab_randomized`。
-全身阶段默认保持原版 G1 风格的域随机化、观测噪声和 PPO 探索噪声：摩擦随机化 `[0.1, 1.25]`、base mass 随机化 `[-1, 3]`、push 随机化开启、观测噪声开启、`init_noise_std=0.8`、`action_scale=0.25`。`joint_finetune` 阶段会使用随机关节初始位置 reset，避免策略只适应默认站姿。
+（使用 `g1_upper` + `joint_finetune`，不加载下半身 checkpoint。）该类 baseline 可走随机 reset、摩擦/质量/`push`、`init_noise_std=0.8` 等与原版 legged gym 对齐的随机化。**类人步态首推下列 AMP 档位。**
 
-#### G1 参考运动（遗留：逐步关节追踪，非推荐）
+---
 
-可选任务 **`g1_upper_motion_ref`**：对 mink 生成的轨迹做**逐步**关节参考塑形。在本项目设定下**效果不如 `g1_upper_amp`**，仅保留以便对照与复现。**不建议**作为主线方案。日志：`logs/g1_upper_motion_ref/`。
+#### G1：参考轨迹逐步塑形（遗留，不推荐）
 
-训练前必须指定动作数据目录（与训练脚本内默认可改）：
+可选 **`g1_upper_motion_ref`**：稠密 **`motion_ref_dof`** 逐步贴参考。在本项目设定下**明显不如 `g1_upper_amp`**，仅保留复现。日志：**`logs/g1_upper_motion_ref/`**。
 
 ```bash
-export MOTION_REF_DATA_DIR=/path/to/mink/pickles   # 例如 AMASS 管线下的 retargeted_motion_data/mink
-
+export MOTION_REF_DATA_DIR=/path/to/mink_or_gmr_pickles   # 递归匹配 `motion_ref.glob_pattern`
 bash legged_gym/scripts/train_g1_upper_motion_ref.sh
 ```
 
-也可自行调用 `python legged_gym/scripts/train.py --task=g1_upper_motion_ref --training_stage=joint_finetune ...`。若配置里 `motion_ref.data_dir` 为空，则依赖环境变量 **`MOTION_REF_DATA_DIR`**，否则环境初始化会报错。
+若配置里 **`motion_ref.data_dir`** 为空，必须设置 **`MOTION_REF_DATA_DIR`**，否则环境初始化报错。
 
-超参见 `legged_gym/envs/g1/g1_config.py` 中的 `G1UpperBodyMotionRefCfg`：`motion_ref_dof` 权重、`motion_ref.err_reduce`、**σ 为关节误差向量 L2 范数尺度（rad），课程按 `σ ← max(σ_min, min(batch均值‖q−q_ref‖₂, σ))` 更新，奖励为 `exp(−mse/σ²)`**、`curriculum_norm_ema_alpha` 等。
+**调参**（[`g1_config.py`](legged_gym/envs/g1/g1_config.py) `G1UpperBodyMotionRefCfg`）：**`motion_ref_dof`**、**`motion_ref.err_reduce`**、**`command_gate`**、**σ 为关节误差向量 L2 范数尺度（rad），课程 `σ ← max(σ_min, min(batch 均值‖q−q_ref‖₂, σ))`，奖励 `exp(−mse/σ²)`**、**`curriculum_norm_ema_alpha`** 等。
 
-#### G1 AMP（判别器对抗式运动先验，**推荐的主线模仿**）
+---
 
-任务 **`g1_upper_amp`**：**推荐**使用判别器对齐专家关节分布，**不**使用稠密 **`motion_ref_dof`** 逐步追踪奖励。专家轨迹来自上文 **「动作重定向」** 任一管线产出的 pickle。
+#### G1：AMP 判别器模仿（**推荐主线**）
 
-- **多帧扩张输入**：判别器输入为若干历史步上拼接的 **关节相对默认位姿的缩放 dof_pos、dof_vel**（与训练中观测缩放一致）。
-- **策略回报**：在每步仿真回报上叠加 **\(\lambda_{\mathrm{amp}} \cdot (-\log(1 - D(\cdot)))\)**（概率来自 `sigmoid(logits)`，含 `clamp`）。**\(\lambda_{\mathrm{amp}}\)** 默认按 **learning iteration 分段课程** 逐渐加大（见下）；关闭课程时用常数 **`reward_scale`**。
-- **判别器训练**：`BCEWithLogitsLoss`；专家样本目标 **`1 - label_smoothing`**，策略 rollout 样本目标 **`label_smoothing`**。当 **\(\lambda_{\mathrm{amp}} \le \texttt{min\_scale\_for\_amp\_disc}\)**（默认 0）时，该迭代 **不跑判别器前向与更新**（纯 PPO 行走阶段）。
-- **实验目录**：`g1_upper_amp`，权重与日志位于 **`logs/g1_upper_amp/`**；checkpoint 内含 **判别器与其优化器**，便于 **`--resume`**。
+任务 **`g1_upper_amp`**：用**二分类判别器**在短**多帧**窗口上读 \(\{q,\dot q\}\)（相对默认站立、与 env 观测同尺度），在 PPO 回报上叠加 **\(\lambda_{\mathrm{amp}} \cdot (-\log(\mathrm{clamp}(1-\sigma(D(x)),\varepsilon)))\)**。**`motion_ref_dof = 0`**，**无**逐步关节追踪奖励。
 
-训练脚本（仓库根目录）：
+实验目录：**`logs/g1_upper_amp/`**。
+
+##### 快速启动
 
 ```bash
-export MOTION_REF_DATA_DIR=/path/to/mink/pickles   # 与同目录参考运动档位相同
-
+# 仓库脚本里的示例默认：仅 CMU 筛选后的 GMR 输出（请改成你的路径）
+export MOTION_REF_DATA_DIR=/path/to/your_pickles
 bash legged_gym/scripts/train_g1_upper_amp.sh
 ```
 
-等价调用：`python legged_gym/scripts/train.py --task=g1_upper_amp --training_stage=joint_finetune ...`。同样需要 **`MOTION_REF_DATA_DIR`**（或配置里写明 `motion_ref.data_dir`）以加载 mink clip。
+等价：`python legged_gym/scripts/train.py --task=g1_upper_amp --training_stage=joint_finetune ...`。可用环境变量 **`NUM_ENVS`**、**`MAX_ITERATIONS`**、**`RUN_NAME`** 等（见 [`train_g1_upper_amp.sh`](legged_gym/scripts/train_g1_upper_amp.sh)）。
 
-超参见 `legged_gym/envs/g1/g1_config.py` 中的 **`G1UpperBodyAmpCfg`** 及其嵌套 **`amp`**：**`curriculum_enabled`**、**`reward_scale_schedule_iters`**（`(迭代阈值, λ_amp)` 列表，默认值以配置文件为准）、**`curriculum_interp_between_milestones`**（里程碑间 λ 线性插值）、**`min_scale_for_amp_disc`**，以及 **`history_frames`**、**`history_window_s`**（多帧判别器在时间窗内均匀取样）、**`hidden_dims`**、**`label_smoothing`**、**`disc_learning_rate`** 等。**`G1UpperBodyAmpCfgPPO.runner.max_iterations`** 默认为 **25000**（可用 `--max_iterations` 覆盖）。checkpoint 内含判别器权重与 **`iter`**（用于恢复课程）。**`motion_ref_dof` = 0，不启用关节参考追踪塑形**。
+##### 专家数据与经验结论
 
----
+- **配置入口**：**`MOTION_REF_DATA_DIR`**（或填 **`motion_ref.data_dir`**），目录下递归匹配 **`motion_ref.glob_pattern`**（默认 **`*.pkl`**），见 [`build_mink_motion_bank`](legged_gym/utils/mink_reference_motion.py)。
+
+- **三库混训问题**：曾将 **CMU + BMLrub + KIT** 行走数据**同时**放入同一专家库；在**单一全局判别器**下不同来源的步态/风格**分布差异大**，训练侧出现**风格冲突**、难以稳定对齐。最终方案改为**仅使用经行走筛选的 CMU 子集**（被试规则与上文 **「数据 / 重定向」** 一致）。**`train_g1_upper_amp.sh` 中的默认路径**演示的是 **CMU 子集目录结构**，实际部署请指向你自己导出的 pickle 根目录。
+
+##### 专家采样（判别器更新时）
+
+| 机制 | 实现 / 配置项 |
+|------|----------------|
+| 抽哪条 clip | **`MinkReferenceMotionBank.sample_clip_indices`**：**均匀随机** clip 下标。可用 **`motion_ref.clip_limit`** 截断「排序后路径列表」的前若干条（见 `build_mink_motion_bank`）。 |
+| clip 内相位 | **`sample_phase_times`**：在单条 clip 时长内**连续均匀**随机起点；按 **`policy_dt`** 线性插值、循环播放。 |
+
+##### \(\lambda_{\mathrm{amp}}\) 课程（模仿项介入节奏）
+
+由 **`G1UpperBodyAmpCfg.amp`** 控制。默认 **`curriculum_enabled = True`**、**`curriculum_interp_between_milestones = False`** → \(\lambda_{\mathrm{amp}}\) **阶梯常数**（里程碑之间**不**线性插值）。
+
+| 里程碑（`learning_iteration` ≥） | \(\lambda_{\mathrm{amp}}\) |
+|:---:|:---:|
+| 0 | 0.000 |
+| 2000 | 0.035 |
+| 6000 | 0.070 |
+| 12000 | 0.100 |
+| 18000 | 0.150 |
+
+**`λ = 0`** 阶段：因 **`min_scale_for_amp_disc = 0.0`**，**不跑判别器前向与反传**（纯 PPO 行走）。若 **`curriculum_enabled = False`**，则使用常数 **`reward_scale = 0.25`**。
+
+训练器默认 **`G1UpperBodyAmpCfgPPO.runner.max_iterations = 25000`**（可用 **`--max_iterations`** 覆盖）；自迭代 **≥18000** 起 \(\lambda\) 保持 **0.15** 直至结束（除非改课程或拉长 run）。
+
+##### 判别器结构与学习率
+
+为缓解 **D 过快过拟合 / 训练不稳**，本仓库相对「宽 MLP」默认做了**降维、降学习率**等调整（数值见配置注释中的旧默认对照）。
+
+| 项 | 本仓库默认 | 说明 |
+|----|------------|------|
+| **`hidden_dims`** | **`[128, 128]`** | 注释中保留旧值 **`[512, 256]`** 供对照 |
+| **`activation`** | `elu` | |
+| **`disc_learning_rate`** | **`1e-5`** | 注释中旧值 **`3e-4`** |
+| **`label_smoothing`** | **`0.1`** | BCE 目标：假样本 → **`ls`**，专家 → **`1−ls`** |
+| **`num_updates_per_iteration`** | **`1`** | 每轮 PPO 迭代内按 **`disc_minibatches`** 完整训练若干 pass |
+| **`disc_minibatches`** | `4` | |
+| **`disc_grad_norm`** | `1.0` | 梯度裁剪 |
+| **`disc_weight_decay`** | `0` | |
+
+##### 其它稳定化默认
+
+| 项 | 默认 |
+|----|------|
+| **`disc_stop_train_accuracy_above`** | **`0.85`** — 单 minibatch **平衡**硬分类准确率过高则**跳过**该 batch 的 D 更新 |
+| **`fake_amp_pool_capacity_rows`** | **`-1`** — 自动容量 \(\max(8192, 8\times\text{steps}\times\text{envs})\) |
+| **`fake_pool_overflow_resample`** / **`fake_pool_mix_fraction`** | **`True`** / **`0.5`** — 负样本混合 **历史池** 与 **当前 rollout** |
+| **`train_feature_mask_prob`** | **`0.1`** — 仅 **训练**时对判别器输入做特征维随机 mask |
+| 时序堆叠 | **`history_frames = 10`**、**`history_window_s = 0.9`** — 在 **`history_window_s`** 秒窗内**均匀**取 **10** 帧拼成 `D` 的输入（见 **`gather_amp_dof_features`**） |
+
+##### 日志与复现
+
+- TensorBoard：**`AMP/lambda_amp`**、**`AMP/mean_step_amp_scaled`**、判别器准确率/跳过次数、**`Timing/learn_disc_amp`** 等。  
+- **续跑**：恢复的 **`iter`** 与上表里程碑应对齐；需要「跑到固定全局 iter」时用 **`--train_to_iteration`** 或调整 **`reward_scale_schedule_iters`**，避免与 checkpoint 计数脱节。
+
+_以上默认均对应 [`legged_gym/envs/g1/g1_config.py`](legged_gym/envs/g1/g1_config.py) 中 **`G1UpperBodyAmpCfg`** / **`G1UpperBodyAmpCfgPPO`**。_
 
 ### 2. Play
 

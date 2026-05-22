@@ -93,71 +93,116 @@ For **G1 human-like walking**, prioritize **`g1_upper_amp`** after preparing cli
 
 ### 1. Training
 
-Run the following command to start training:
-
 ```bash
 python legged_gym/scripts/train.py --task=xxx
 ```
 
-#### ⚙️ Parameter Description
-- `--task`: Required parameter; values include `go2`, `g1`, `h1`, `h1_2`, plus G1 23DoF variants: **`g1_upper_amp`** (motion prior, main line here), **`g1_upper`** (baseline PPO staging), **`g1_upper_motion_ref`** (dense reference shaping; legacy / not recommended—see Motion retargeting section for data sources).
+#### ⚙️ Common CLI flags
 
-- `--headless`: Defaults to starting with a graphical interface; set to true for headless mode (higher efficiency).
-- `--resume`: Resume training from a checkpoint in the logs.
-- `--experiment_name`: Name of the experiment to run/load.
-- `--run_name`: Name of the run to execute/load.
-- `--load_run`: Name of the run to load; defaults to the latest run.
-- `--checkpoint`: Checkpoint number to load; defaults to the latest file.
-- `--num_envs`: Number of environments for parallel training.
-- `--seed`: Random seed.
-- `--max_iterations`: Maximum number of training iterations.
-- `--sim_device`: Simulation computation device; specify CPU as `--sim_device=cpu`.
-- `--rl_device`: Reinforcement learning computation device; specify CPU as `--rl_device=cpu`.
-- `--training_stage`: G1 23-DoF staged training (`upper_body` or `joint_finetune`; see scripts under `legged_gym/scripts/`).
-- `--lower_body_checkpoint`: For `upper_body`, path to the 12-DoF lower-body **`model_*.pt`** checkpoint (not the exported TorchScript policy).
-- `--resume_fork`: When loading a checkpoint, create a **new** timestamped run folder for TensorBoard and saves instead of staying in the checkpoint’s folder; the **iteration counter still restores from the checkpoint** (same semantics as configuring `runner.resume_continue_logdir = False` for that run).
-- `--train_to_iteration`: Train until a **global** iteration counter (computes remaining steps as `target − restored_iter`; overrides additive `--max_iterations` for this launch).
+| Topic | Flags / behaviour |
+|--------|-------------------|
+| Task | **`--task`** — e.g. `go2`, `g1`, `h1`, `h1_2`. For Unitree **G1 23‑DoF**: **`g1_upper_amp`** (discriminator imitation, **recommended** main line here), **`g1_upper`** (staged baseline PPO), **`g1_upper_motion_ref`** (dense per‑step shaping; legacy / not recommended). |
+| Rendering & devices | **`--headless`**, **`--sim_device`**, **`--rl_device`**, **`--num_envs`**, **`--seed`** |
+| How long to train | **`--max_iterations`** (→ `learn(num_learning_iterations)`) executes that many optimisation passes **starting from restored** `current_learning_iteration` (**additive on resume**, not usually a fixed global ceiling). Prefer **`--train_to_iteration`** to stop at an absolute **`iter`** value — remaining \(\approx\) target **`−`** restored `iter`. |
+| Checkpoints | **`--resume`**, **`--load_run`**, **`--checkpoint`** — any loader path restores **weights and** `current_learning_iteration` (**required** for \(\lambda_{\mathrm{amp}}\) milestones to align). |
+| G1 staging | **`--training_stage`** = `upper_body` \| `joint_finetune`; **`--lower_body_checkpoint`**: training **`model_*.pt`** for 12‑DoF **`g1`**, never the exported TorchScript policy. |
+| TensorBoard folders | **`--resume_fork`** (CLI) ≡ one‑shot **`runner.resume_continue_logdir = False`** in config: **new** dated run folder while **still** loading checkpoint; **`resume_continue_logdir`** does **not** turn loading on/off—only **reuse vs new** directory. |
 
-**Checkpoint resume**:
+**Default save layout**: **`logs/<experiment_name>/<date_time>_<run_name>/model_<iteration>.pt`** (checkpoint includes **`iter`**; AMP checkpoints also bundle **`discriminator_state_dict`** and optimizer state).
 
-- Passing **`--resume`** loads weights **and restores** `current_learning_iteration` (used by curricula such as \(\lambda_{\mathrm{amp}}\)).  
-- Passing **`--checkpoint`** and/or **`--load_run`** on the CLI also **enables resume** (same loader path).
-- **`resume_continue_logdir`** in Python config (**`legged_robot_config.py`** `runner`): only selects **reuse vs new log directory**—it does **not** toggle loading.
+#### G1 staged PPO (**without** AMP prior — baselines)
 
-**Default Training Result Directory**: `logs/<experiment_name>/<date_time>_<run_name>/model_<iteration>.pt`
+**`g1`** → **`g1_upper` + `upper_body`** (lower body frozen to a **`g1` checkpoint**) → **`g1_upper` + `joint_finetune`** full‑body refinement. Helper scripts live in **`legged_gym/scripts/`** (`train_g1_upper_stage2.sh`, `train_g1_fullbody_isaaclab.sh`, …).
 
-#### G1: motion reference imitation (legacy; not recommended)
+#### G1: motion‑reference imitation (legacy — not recommended)
 
-Optional task **`g1_upper_motion_ref`**: dense **per-step** joint reference shaping toward mink pickles. **We did not get satisfactory results with this trajectory** compared to **`g1_upper_amp`**; the task remains in-tree for reproducibility only. Logs: **`logs/g1_upper_motion_ref/`**.
-
-**Train** (from the repository root):
+Task **`g1_upper_motion_ref`**: dense **per‑step** reference shaping (**`motion_ref_dof`**) toward pickle joint trajectories. We **did not** get results comparable to **`g1_upper_amp`** here; retained for reproducibility only. Logs: **`logs/g1_upper_motion_ref/`**.
 
 ```bash
-export MOTION_REF_DATA_DIR=/path/to/mink/pickles   # directory of retargeted *.pkl clips
-
+export MOTION_REF_DATA_DIR=/path/to/mink_or_gmr_pickles   # recursive `**/glob_pattern.pkl`
 bash legged_gym/scripts/train_g1_upper_motion_ref.sh
 ```
 
-You can also set `NUM_ENVS`, `MAX_ITERATIONS`, `RUN_NAME`, or call `train.py` with `--task=g1_upper_motion_ref --training_stage=joint_finetune` and the same environment variable. If `motion_ref.data_dir` is empty in config, **`MOTION_REF_DATA_DIR` must be set** or the environment will raise at startup.
+If **`motion_ref.data_dir`** is empty in Python config you **must** set **`MOTION_REF_DATA_DIR`** (or training fails at env init).
 
-**Tune** (see `legged_gym/envs/g1/g1_config.py`, class `G1UpperBodyMotionRefCfg`): `motion_ref_dof` scale, `motion_ref.err_reduce` (`mean` vs `sum`), `command_gate`, **`motion_ref.sigma` / `sigma_min` (L² norm scale in rad for joint error vector, curriculum updates `σ ← max(σ_min, min(mean ‖q−q_ref‖₂, σ))`)**, `curriculum_norm_ema_alpha`, etc.
+**Tune** (**`G1UpperBodyMotionRefCfg`**, **`motion_ref`** / rewards in [`g1_config.py`](legged_gym/envs/g1/g1_config.py)): **`motion_ref_dof`**, **`motion_ref.err_reduce`** (`mean` vs `sum`), **`command_gate`**, **`motion_ref.sigma` / `sigma_min`** — σ is rad scale on the \(\|q−q_{\mathrm{ref}}\|_2\) vector magnitude; **`curriculum_norm_ema_alpha`**, etc.
 
-#### G1: AMP-style motion prior (**main imitation path**)
+---
 
-Task **`g1_upper_amp`** is the **preferred** setup here: **AMP-style discriminator** (no dense **`motion_ref_dof`** tracking reward). Experts are walking clips produced by either retarget fork above (**`Motion retargeting`** section).
+#### G1: AMP‑style imitation (**recommended**)
 
-- Experiment folder: **`logs/g1_upper_amp/`**
-- Train script (repo root):
+Task **`g1_upper_amp`** uses a **binary discriminator** on a short **multi‑frame** window of \(\{\, q,\dot q \,\}\) (relative default pose × env scaling) and adds **`r_amp = -\log\left(\mathrm{clamp}(1 - \sigma(\mathrm{D}(x)), \varepsilon)\right)`** weighted by \(\lambda_{\mathrm{amp}}\) to the PPO return. **`motion_ref_dof` = 0** — **no** dense joint‑tracking bonus.
+
+Experiment directory: **`logs/g1_upper_amp/`**.
+
+##### Quick start
 
 ```bash
-export MOTION_REF_DATA_DIR=/path/to/mink/pickles
-
+# Example default in repo script: filtered CMU-only GMR output (replace with YOUR folder)
+export MOTION_REF_DATA_DIR=/path/to/your_pickles
 bash legged_gym/scripts/train_g1_upper_amp.sh
 ```
 
-Equivalent: `python legged_gym/scripts/train.py --task=g1_upper_amp --training_stage=joint_finetune ...`. Same **`MOTION_REF_DATA_DIR`** (or filled `motion_ref.data_dir`) as `g1_upper_motion_ref` so clips load.
+Equivalent: **`python legged_gym/scripts/train.py --task=g1_upper_amp --training_stage=joint_finetune ...`**. Overrides: env **`NUM_ENVS`**, **`MAX_ITERATIONS`**, **`RUN_NAME`**, **`MOTION_REF_DATA_DIR`** ([`train_g1_upper_amp.sh`](legged_gym/scripts/train_g1_upper_amp.sh)).
 
-Tune **`G1UpperBodyAmpCfg` / nested `amp`** (and mirrored `train_cfg`): **`curriculum_enabled`**, **`reward_scale_schedule_iters`** (list of `(learning_iteration, λ_amp)` milestones; see `legged_gym/envs/g1/g1_config.py` for defaults), **`curriculum_interp_between_milestones`** (linear ramp between milestones), **`min_scale_for_amp_disc`**, **`history_frames`**, **`history_window_s`** (seconds over which uniformly spaced AMP history frames are taken), **`hidden_dims`**, **`label_smoothing`**, constant fallback **`reward_scale`** when curriculum is off, `disc_learning_rate`, `num_updates_per_iteration`, etc. **`G1UpperBodyAmpCfgPPO.runner.max_iterations`** is **25000** by default (override with `--max_iterations`). Checkpoints **`model_*.pt` also contain discriminator weights** (`discriminator_state_dict`) and the stored **`iter`** field for resumed curricula. TensorBoard: **`AMP/lambda_amp`**, **`AMP/mean_step_amp_scaled`**, **`Timing/*`** splits where applicable.
+##### Expert clips & empirical data choice
+
+- **Loader layout**: **`MOTION_REF_DATA_DIR`** (overrides empty **`motion_ref.data_dir`**) pointing at a directory of **`*.pkl`** clips; loader uses **`motion_ref.glob_pattern`** (default **`"*.pkl"`**) recursively ([`build_mink_motion_bank`](legged_gym/utils/mink_reference_motion.py)).
+
+- **Lesson learned**: pooling **three** AMASS-derived corpora (**CMU**, **BMLrub**, **KIT**) in one bank produced **mixed stylistic regimes** under a single global discriminator—we observed **distribution conflict**. We therefore **narrowed AMP training to the filtered CMU subset only** (same subject rules as **`Data:` / Motion retargeting**). The **`train_g1_upper_amp.sh` default illustrates a CMU‑subset layout** (`robot_cmu_subset`); swap to wherever your pickles live.
+
+##### How experts are sampled (discriminator minibatches)
+
+| Mechanism | Implementation / parameters |
+|-----------|------------------------------|
+| Which clip | **`MinkReferenceMotionBank.sample_clip_indices`** — **uniform random** clip index \(\in \{0,N_{\mathrm{clips}}-1\}\). Limit files with **`motion_ref.clip_limit`** (truncate sorted path list — see [`build_mink_motion_bank`](legged_gym/utils/mink_reference_motion.py)). |
+| Which phase inside a clip | **`sample_phase_times`** — continuous **uniform** over each clip duration; loops with linear interp at **`policy_dt`**. |
+
+##### \(\lambda_{\mathrm{amp}}\) curriculum (reward mixing)
+
+Controlled by **`G1UpperBodyAmpCfg.amp`**. Default **`curriculum_enabled = True`**, **`curriculum_interp_between_milestones = False`** → \(\lambda_{\mathrm{amp}}\) is **piecewise constant** (**no** interpolation between breakpoints).
+
+| Milestone (`learning_iteration` ≥) | \(\lambda_{\mathrm{amp}}\) |
+|:---:|:---:|
+| 0 | 0.000 |
+| 2000 | 0.035 |
+| 6000 | 0.070 |
+| 12000 | 0.100 |
+| 18000 | 0.150 |
+
+Early phase keeps **`λ = 0`**: discriminator **skipped** (**`min_scale_for_amp_disc = 0.0`**, i.e. no forward/backprop when \(\lambda\le0\)). Fallback constant **`reward_scale = 0.25`** applies when **`curriculum_enabled`** is **`False`**. Trainer default **`runner.max_iterations = 25000`** (\(\lambda\) stays at **0.15** from iter **18000** onward unless you lengthen or edit schedule).
+
+##### Discriminator optimisation (architecture & LR)
+
+Configured in **`G1UpperBodyAmpCfg.amp`** (mirror under **`train_cfg['amp']`**). Defaults deliberately **lighter** than a “full‑width” imitation stack—the heavy MLP discriminator overfit quickly and destabilised early training.
+
+| Item | Default (this repo) | Notes |
+|------|--------------------|-------|
+| **`hidden_dims`** | **`[128, 128]`** | Comment block shows former **`[512, 256]`** for reference. |
+| **`activation`** | `elu` | |
+| **`disc_learning_rate`** | **`1e-5`** | Comment block keeps legacy **`3e-4`** for comparison. |
+| **`label_smoothing`** | **`0.1`** | Targets **fake → `ls`**, **expert → `1−ls`** (`BCEWithLogits`). |
+| **`num_updates_per_iteration`** | **`1`** | Full **`disc_minibatches`** passes per rollout update iteration. |
+| **`disc_minibatches`** | `4` | |
+| **`disc_grad_norm`** | `1.0` | clipping |
+| **`disc_weight_decay`** | `0` | |
+
+##### Extra stabilisers (optional but default‑on here)
+
+| Item | Default |
+|------|---------|
+| **`disc_stop_train_accuracy_above`** | **`0.85`** — pause discriminator minibatches whose **balanced** hard accuracy exceeds the threshold (**mitigate D collapsing / overfitting**) |
+| **`fake_amp_pool_capacity_rows`** | **`-1`** — auto \(\max(8192, 8 \times\text{steps}\times\text{envs})\) policy‑feature rows |
+| **`fake_pool_overflow_resample`**, **`fake_pool_mix_fraction`** | **`True`**, **`0.5`** — minibatch negatives mix **replay pool** ↔ **fresh rollout** |
+| **`train_feature_mask_prob`** | **`0.1`** — dropout‑style masking on **training‑time** discriminator inputs |
+| Temporal stack | **`history_frames = 10`**, **`history_window_s = 0.9`** — samples **uniformly spaced in time** spanning the last **`history_window_s`** seconds up to anchor time (see **`gather_amp_dof_features`**). |
+
+##### Logging & reproducibility
+
+- TensorBoard (**readouts** include **`AMP/lambda_amp`**, **`AMP/mean_step_amp_scaled`**, discriminator accuracies vs skip counts, **`Timing/learn_disc_amp`**, …).  
+- **Resume semantics**: restored **`iter`** must match \(\lambda_{\mathrm{amp}}\) schedule milestones; **`--train_to_iteration`** or edited **`reward_scale_schedule_iters`** avoids “silent” mismatches vs wall‑clock checkpoints.
+
+_All numeric defaults above refer to [`legged_gym/envs/g1/g1_config.py`](legged_gym/envs/g1/g1_config.py) (`G1UpperBodyAmpCfg`, `G1UpperBodyAmpCfgPPO`)._ 
 
 ### 2. Play
 
